@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f8f9fc">
+<meta name="description" content="物映产品设计工作台。用桌面音箱探索二维草图、三维造型和材质表达。">
+<title>物映 · 产品设计工作台</title>
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark"><i data-icon="logo"></i></div><div><strong>物映</strong><span>WUYING STUDIO</span></div></div>
+    <div class="project-crumb"><span>工作台</span><i data-icon="chevron"></i><strong>桌面音箱 · 造型探索</strong></div>
+    <div class="top-actions"><span class="badge preview-badge"><b></b> 交互预览</span><button class="btn btn-primary" id="export"><i data-icon="download"></i><span>导出视图</span></button></div>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="项目方案">
+      <div class="side-heading"><div class="eyebrow">DESIGN STUDY / 01</div><h1>造型方案</h1><p>桌面音箱概念设计</p></div>
+      <div class="variant-list" id="variants" aria-label="方案列表"></div>
+      <div class="asset-list"><div class="asset-title"><strong>参考素材</strong><button class="icon-btn" id="addReference" title="添加参考图片" aria-label="添加参考图片"><i data-icon="plus"></i></button></div>
+      <button class="asset-card" id="openReference"><img id="referenceThumb" src="assets/reference.jpg" alt=""><span><strong id="referenceName">工业造型研究</strong><small>参考图片</small></span><i data-icon="chevron"></i></button><input type="file" id="referenceInput" accept="image/*" hidden></div>
+      <div class="side-footer"><span class="save-dot"></span><span id="saveText">自动保存在此浏览器</span></div>
+    </aside>
+    <main class="center" aria-label="编辑画布">
+      <div class="canvas-toolbar">
+        <div class="segmented" aria-label="画布视图"><button data-view="sketch"><i data-icon="pen"></i>二维草图</button><button data-view="model" class="is-active"><i data-icon="cube"></i>三维预览</button></div>
+        <div class="toolbar-actions"><button class="icon-btn" id="undo" title="撤销 Ctrl+Z" aria-label="撤销"><i data-icon="undo"></i></button><button class="icon-btn" id="redo" title="重做 Ctrl+Shift+Z" aria-label="重做"><i data-icon="redo"></i></button><span class="toolbar-divider"></span><button class="icon-btn" id="resetView" title="重置视角" aria-label="重置视角"><i data-icon="target"></i></button></div>
+      </div>
+      <div class="stage" id="stage">
+        <div class="stage-label"><span class="stage-kicker" id="stageKicker">PERSPECTIVE</span><strong id="stageTitle">A01 / 圆角盒体</strong></div>
+        <canvas id="model" tabindex="0" role="img" aria-label="桌面音箱三维模型，拖动或用方向键旋转"></canvas>
+        <svg id="sketch" viewBox="0 0 720 570" preserveAspectRatio="xMidYMid meet" role="img" aria-label="桌面音箱可编辑二维正视图" hidden></svg>
+        <div class="stage-caption"><i data-icon="move"></i><span id="stageHint">拖动旋转 · 滚轮缩放</span></div>
+        <div class="viewport-tools"><button class="icon-btn" id="zoomOut" title="缩小" aria-label="缩小"><i data-icon="minus"></i></button><button class="zoom-value" id="zoomReset" title="恢复 100%">100%</button><button class="icon-btn" id="zoomIn" title="放大" aria-label="放大"><i data-icon="plus"></i></button></div>
+      </div>
+      <div class="statusbar"><span><i data-icon="link"></i> <span id="linkState">二维 / 三维联动</span></span><span id="dimensionReadout">140 × 110 × 76 mm</span></div>
+    </main>
+    <aside class="inspector" aria-label="属性">
+      <div class="inspector-head"><div class="eyebrow">PROPERTIES</div><h2>属性面板</h2></div>
+      <div class="inspector-tabs" role="tablist" aria-label="属性分类"><button role="tab" aria-selected="true" aria-controls="panel-shape" id="tab-shape" data-panel="shape" class="is-active">造型</button><button role="tab" aria-selected="false" aria-controls="panel-finish" id="tab-finish" data-panel="finish">材质灯光</button><button role="tab" aria-selected="false" aria-controls="panel-assistant" id="tab-assistant" data-panel="assistant"><i data-icon="spark"></i>助手</button></div>
+      <section id="panel-shape" class="panel" role="tabpanel" aria-labelledby="tab-shape">
+        <div class="control-section"><div class="control-heading"><h3>主体尺寸</h3><span>MM</span></div><div id="shapeRanges"></div></div>
+        <div class="control-section"><div class="control-heading"><h3>部件约束</h3><span>01</span></div><label class="constraint-row"><i data-icon="lock"></i><span><strong>固定旋钮位置</strong><small>缩放主体时保留旋钮坐标</small></span><input type="checkbox" class="switch" id="lockButton" checked></label><p class="constraint-note" id="constraintNote"></p></div>
+        <div class="control-section compact-section"><div class="control-heading"><h3>工作方式</h3></div><p>在二维视图拖动轮廓控制点，或在这里输入精确尺寸。两个视图使用同一份参数。</p></div>
+      </section>
+      <section id="panel-finish" class="panel" role="tabpanel" aria-labelledby="tab-finish" hidden>
+        <div class="control-section"><div class="control-heading"><h3>外壳材质</h3></div><div class="material-options" id="materials"></div></div>
+        <div class="control-section"><div class="control-heading"><h3>外壳颜色</h3></div><div class="swatches" id="swatches"></div></div>
+        <div class="control-section"><div class="control-heading"><h3>摄影棚灯光</h3></div><div id="lightRange"></div><p class="constraint-note">点击画布拖动，可从不同角度观察材质。</p></div>
+      </section>
+      <section id="panel-assistant" class="panel" role="tabpanel" aria-labelledby="tab-assistant" hidden>
+        <div class="control-section"><div class="control-heading"><h3>方案助手</h3><span class="badge">规则演示</span></div><p>根据当前尺寸、材质和约束整理设计记录。</p><button class="btn btn-ghost wide" id="summarize"><i data-icon="spark"></i>整理当前方案</button><div class="assistant-output" id="summary" aria-live="polite" hidden></div></div>
+        <div class="control-section"><div class="control-heading"><h3>偏好记录</h3></div><button class="btn btn-ghost wide" id="remember"><i data-icon="bookmark"></i>保存当前材质偏好</button><div class="preference-list" id="preferences"></div></div>
+      </section>
+    </aside>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+<dialog class="dialog" id="referenceDialog" aria-labelledby="dialogTitle"><div class="dialog-head"><strong id="dialogTitle">参考素材</strong><button class="icon-btn" id="closeReference" aria-label="关闭"><i data-icon="close"></i></button></div><img id="dialogImage" alt="产品造型参考"><p id="referenceCredit">桌面音箱造型参考 · 概念示意</p></dialog>
+<script src="vendor/paper-core.js"></script><script src="renderer.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
+

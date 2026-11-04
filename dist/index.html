@@ -7,7 +7,7 @@
 <meta name="description" content="物映产品设计工作台。用桌面音箱探索二维草图、三维造型和材质表达。">
 <title>物映 · 产品设计工作台</title>
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="board.css"><link rel="stylesheet" href="generation.css">
 </head>
 <body>
 <div class="app-shell">
@@ -26,21 +26,42 @@
     </aside>
     <main class="center" aria-label="编辑画布">
       <div class="canvas-toolbar">
-        <div class="segmented" aria-label="画布视图"><button data-view="sketch"><i data-icon="pen"></i>二维草图</button><button data-view="model" class="is-active"><i data-icon="cube"></i>三维预览</button></div>
+        <div class="segmented" aria-label="画布视图"><button data-view="board" class="is-active"><i data-icon="board"></i>自由画布</button><button data-view="sketch"><i data-icon="pen"></i>二维草图</button><button data-view="model"><i data-icon="cube"></i>三维预览</button></div>
         <div class="toolbar-actions"><button class="icon-btn" id="undo" title="撤销 Ctrl+Z" aria-label="撤销"><i data-icon="undo"></i></button><button class="icon-btn" id="redo" title="重做 Ctrl+Shift+Z" aria-label="重做"><i data-icon="redo"></i></button><span class="toolbar-divider"></span><button class="icon-btn" id="resetView" title="重置视角" aria-label="重置视角"><i data-icon="target"></i></button></div>
       </div>
       <div class="stage" id="stage">
         <div class="stage-label"><span class="stage-kicker" id="stageKicker">PERSPECTIVE</span><strong id="stageTitle">A01 / 圆角盒体</strong></div>
         <canvas id="model" tabindex="0" role="img" aria-label="桌面音箱三维模型，拖动或用方向键旋转"></canvas>
         <svg id="sketch" viewBox="0 0 720 570" preserveAspectRatio="xMidYMid meet" role="img" aria-label="桌面音箱可编辑二维正视图" hidden></svg>
-        <div class="stage-caption"><i data-icon="move"></i><span id="stageHint">拖动旋转 · 滚轮缩放</span></div>
+        <div id="freeBoard" hidden></div><div class="stage-caption"><i data-icon="move"></i><span id="stageHint">拖动旋转 · 滚轮缩放</span></div>
         <div class="viewport-tools"><button class="icon-btn" id="zoomOut" title="缩小" aria-label="缩小"><i data-icon="minus"></i></button><button class="zoom-value" id="zoomReset" title="恢复 100%">100%</button><button class="icon-btn" id="zoomIn" title="放大" aria-label="放大"><i data-icon="plus"></i></button></div>
       </div>
       <div class="statusbar"><span><i data-icon="link"></i> <span id="linkState">二维 / 三维联动</span></span><span id="dimensionReadout">140 × 110 × 76 mm</span></div>
     </main>
     <aside class="inspector" aria-label="属性">
       <div class="inspector-head"><div class="eyebrow">PROPERTIES</div><h2>属性面板</h2></div>
-      <div class="inspector-tabs" role="tablist" aria-label="属性分类"><button role="tab" aria-selected="true" aria-controls="panel-shape" id="tab-shape" data-panel="shape" class="is-active">造型</button><button role="tab" aria-selected="false" aria-controls="panel-finish" id="tab-finish" data-panel="finish">材质灯光</button><button role="tab" aria-selected="false" aria-controls="panel-assistant" id="tab-assistant" data-panel="assistant"><i data-icon="spark"></i>助手</button></div>
+      <div class="inspector-tabs" role="tablist" aria-label="属性分类"><button role="tab" aria-selected="false" aria-controls="panel-generate" id="tab-generate" data-panel="generate"><i data-icon="spark"></i>AI 出图</button><button role="tab" aria-selected="true" aria-controls="panel-shape" id="tab-shape" data-panel="shape" class="is-active">造型</button><button role="tab" aria-selected="false" aria-controls="panel-finish" id="tab-finish" data-panel="finish">材质灯光</button><button role="tab" aria-selected="false" aria-controls="panel-assistant" id="tab-assistant" data-panel="assistant"><i data-icon="spark"></i>助手</button></div>
+<section id="panel-generate" class="panel" role="tabpanel" aria-labelledby="tab-generate" hidden>
+ <div class="control-section ai-head"><div class="ai-eyebrow">RENDER STUDIO <span class="ai-connection"><b id="connectionDot"></b><span id="connectionLabel">未连接</span></span></div><h3>草图出图</h3><p>从自由画布选取草图或曲线，用它约束图像的轮廓。</p></div>
+ <div class="control-section"><div class="control-heading"><h3>控形输入</h3><span>CONTROLNET</span></div>
+  <div class="ai-source"><i data-icon="pen"></i><span><strong id="controlSource">当前方案草图</strong><small>选择画布对象可替换输入</small></span></div>
+  <button type="button" class="btn btn-ghost wide ai-preview-button" id="controlPreview">预览控形图</button>
+  <img id="controlThumb" class="control-thumb" alt="实际送入控形流程的线稿预览" hidden>
+  <div class="range-row ai-influence"><div class="range-label"><label for="controlStrength">轮廓约束强度</label><output id="strengthReadout" for="controlStrength">0.85</output></div><input id="controlStrength" type="range" min="0.1" max="1" step="0.05" value="0.85"><div class="ai-endpoints"><span>更自由</span><span>更贴合</span></div></div>
+ </div>
+ <div class="control-section ai-prompt-section"><div class="control-heading"><h3><label for="renderPrompt">画面描述</label></h3></div>
+  <textarea id="renderPrompt" rows="3" placeholder="描述材质、光照和摄影场景">A compact rounded desktop speaker, satin brushed aluminum, dark perforated grille, soft studio light, warm gray backdrop, industrial product render</textarea>
+  <div class="prompt-presets" aria-label="渲染预设"><button type="button" data-render-preset="metal">金属棚拍</button><button type="button" data-render-preset="fabric">织物柔光</button><button type="button" data-render-preset="clay">灰模研究</button></div>
+ </div>
+ <div class="control-section ai-run"><button type="button" class="btn btn-primary wide" id="generateRender"><i data-icon="spark"></i>生成效果图</button><button type="button" class="btn btn-ghost wide" id="stopRender" hidden>停止等待</button><p id="comfyStatus" class="constraint-note" role="status">连接 ComfyUI 后可运行草图控形出图。</p></div>
+ <details id="comfyConfig" class="control-section comfy-config"><summary>连接 ComfyUI</summary>
+  <label for="comfyEndpoint">服务地址</label><input id="comfyEndpoint" type="url" placeholder="http://127.0.0.1:8188" autocomplete="off" spellcheck="false">
+  <button type="button" id="testComfy" class="btn btn-ghost wide">检测连接</button>
+  <div id="comfyModels" hidden><label for="comfyCheckpoint">SD 1.5 基础模型</label><select id="comfyCheckpoint"></select><label for="comfyControlnet">SD 1.5 Scribble 控形模型</label><select id="comfyControlnet"></select></div>
+  <p class="constraint-note">先在本机启动 ComfyUI，再检测连接。浏览器询问时允许本地网络访问。生成时，草图和描述会发送到所填服务。</p>
+  <p class="constraint-note">如果连接提示跨域错误，请使用允许此网页来源的 ComfyUI 启动参数。<code id="comfyCorsOrigin"></code></p>
+ </details>
+</section>
       <section id="panel-shape" class="panel" role="tabpanel" aria-labelledby="tab-shape">
         <div class="control-section"><div class="control-heading"><h3>主体尺寸</h3><span>MM</span></div><div id="shapeRanges"></div></div>
         <div class="control-section"><div class="control-heading"><h3>部件约束</h3><span>01</span></div><label class="constraint-row"><i data-icon="lock"></i><span><strong>固定旋钮位置</strong><small>缩放主体时保留旋钮坐标</small></span><input type="checkbox" class="switch" id="lockButton" checked></label><p class="constraint-note" id="constraintNote"></p></div>
@@ -61,7 +82,6 @@
 <div class="toast" id="toast" role="status" hidden></div>
 <dialog class="dialog" id="referenceDialog" aria-labelledby="dialogTitle"><div class="dialog-head"><strong id="dialogTitle">参考素材</strong><button class="icon-btn" id="closeReference" aria-label="关闭"><i data-icon="close"></i></button></div><img id="dialogImage" alt="产品造型参考"><p id="referenceCredit">桌面音箱造型参考 · 概念示意</p></dialog>
 <script src="vendor/paper-core.js"></script><script src="renderer.js"></script>
-<script src="app.js"></script>
+<script src="board.js"></script><script src="comfy.js"></script><script src="app.js"></script><script src="generation.js"></script>
 </body>
 </html>
-

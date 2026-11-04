@@ -5,6 +5,7 @@ const $$ = (q, scope = document) => [...scope.querySelectorAll(q)];
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 const icons = {
   logo:'<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>',
+  board:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h3v3H8zm5 5h3v3h-3z"/>',
   chevron:'<path d="m9 5 7 7-7 7"/>',
   download:'<path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/>',
   plus:'<path d="M12 5v14M5 12h14"/>', minus:'<path d="M5 12h14"/>',
@@ -89,7 +90,7 @@ function restore(raw) {
 $('#undo').onclick=()=>{if(!before.length)return;after.push(snapshot());restore(before.pop());};
 $('#redo').onclick=()=>{if(!after.length)return;before.push(snapshot());restore(after.pop());};
 document.addEventListener('keydown',e=>{
-  if(!(e.ctrlKey||e.metaKey)||e.key.toLowerCase()!=='z'||e.target.matches('input,textarea'))return;
+  if(view==='board'||!(e.ctrlKey||e.metaKey)||e.key.toLowerCase()!=='z'||e.target.matches('input,textarea'))return;
   e.preventDefault();
   (e.shiftKey ? $('#redo') : $('#undo')).click();
 });
@@ -135,28 +136,35 @@ $$('[data-color]').forEach(el=>{el.onclick=()=>{change(()=>{current().color=el.d
 function setView(next) {
   view=next;
   model.hidden=next!=='model'; sketch.toggleAttribute('hidden',next!=='sketch');
+  if(next==='board')board?.show();else board?.hide();
   stage.dataset.view=next;
-  $('#stageKicker').textContent=next==='model'?'PERSPECTIVE':'ORTHOGRAPHIC / FRONT';
+  $('#undo').hidden=$('#redo').hidden=next==='board';
+  $('.toolbar-divider').hidden=next==='board';
+  $('#linkState').textContent=next==='board'?'草图 / 参考 / 出图':'二维 / 三维联动';
+  $('#export span').textContent=next==='board'?'导出选中':'导出视图';
+  $('#zoomReset').textContent=Math.round((next==='board'&&board?board.getZoom():zoom)*100)+'%';
+  $('#stageKicker').textContent=next==='board'?'WORKBENCH':next==='model'?'PERSPECTIVE':'ORTHOGRAPHIC / FRONT';
   $('#stageHint').textContent=next==='model'?'拖动旋转 · 滚轮缩放':'拖动控制点编辑轮廓';
-  $$('[data-view]').forEach(el=>{const is=el.dataset.view===next;el.classList.toggle('is-active',is);el.setAttribute('aria-pressed',is);});
+  $$('.segmented [data-view]').forEach(el=>{const is=el.dataset.view===next;el.classList.toggle('is-active',is);el.setAttribute('aria-pressed',is);});
   requestDraw();
 }
-$$('[data-view]').forEach(el=>{el.onclick=()=>setView(el.dataset.view);});
+$$('.segmented [data-view]').forEach(el=>{el.onclick=()=>setView(el.dataset.view);});
 $$('[data-panel]').forEach(el=>{el.onclick=()=>{
   panel=el.dataset.panel;
   $$('[data-panel]').forEach(t=>{const is=t.dataset.panel===panel;t.classList.toggle('is-active',is);t.setAttribute('aria-selected',is);});
   $$('.inspector .panel').forEach(p=>{p.hidden=p.id!=='panel-'+panel;});
   if(panel==='finish')setView('model');
+  if(panel==='generate'&&board)setView('board');
 };});
 function setZoom(next) {
   zoom=Math.round(clamp(next,.6,1.55)*100)/100;
   stage.style.setProperty('--view-zoom',zoom);
   $('#zoomReset').textContent=Math.round(zoom*100)+'%';
 }
-$('#zoomIn').onclick=()=>setZoom(zoom+.1);
-$('#zoomOut').onclick=()=>setZoom(zoom-.1);
-$('#zoomReset').onclick=()=>setZoom(1);
-$('#resetView').onclick=()=>{rotation=-24;tilt=-14;setZoom(1);requestDraw();toast('视角已重置');};
+$('#zoomIn').onclick=()=>view==='board'&&board?board.zoom(.1):setZoom(zoom+.1);
+$('#zoomOut').onclick=()=>view==='board'&&board?board.zoom(-.1):setZoom(zoom-.1);
+$('#zoomReset').onclick=()=>view==='board'&&board?board.zoomReset():setZoom(1);
+$('#resetView').onclick=()=>{if(view==='board'){board?.resetView();toast('画布视角已重置');return;}rotation=-24;tilt=-14;setZoom(1);requestDraw();toast('视角已重置');};
 stage.addEventListener('wheel',e=>{if(view!=='model'||window.innerWidth<760)return;e.preventDefault();setZoom(zoom+(e.deltaY<0?.06:-.06));},{passive:false});
 let orbit;
 model.addEventListener('pointerdown',e=>{
@@ -243,7 +251,7 @@ function requestDraw() {
   frame=requestAnimationFrame(()=>{
     frame=0;
     if(view==='model')window.WuyingRenderer?.draw(model,{...current(),rotation,tilt});
-    else drawSketch();
+    else if(view==='sketch')drawSketch();
   });
 }
 function refresh() {
@@ -314,8 +322,9 @@ function download(blob,name){
   const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download=name;
   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
 }
-$('#export').onclick=()=>{
+$('#export').onclick=async()=>{
   const code='物映-'+selected().code;
+  if(view==='board'&&board){try{const blob=await board.exportSelected();download(blob,code+'-画布.png');toast('已导出画布对象');}catch(e){toast(e.message||'无法导出画布对象');}return;}
   if(view==='sketch'){
     drawSketch();
     download(new Blob([new XMLSerializer().serializeToString(sketch)],{type:'image/svg+xml;charset=utf-8'}),code+'-草图.svg');
@@ -328,6 +337,17 @@ $('#export').onclick=()=>{
   canvas.toBlob(blob=>{if(blob){download(blob,code+'-三维预览.png');toast('已导出三维预览');}},'image/png');
 };
 new ResizeObserver(requestDraw).observe(stage);
-showReference();renderPrefs();setView('model');refresh();
+const currentControlSvg = () => {
+  const s=current(), w=s.width*SCALE,h=s.height*SCALE,x=CX-w/2,y=CY-h/2;
+  const r=Math.min(s.variant==='capsule'?w*.45:s.radius*SCALE,w*.45,h*.45);
+  return '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="570" viewBox="0 0 720 570"><rect width="720" height="570" fill="white"/><g fill="none" stroke="black" stroke-width="5" stroke-linejoin="round"><path d="'+vectorProfile(x,y,w,h,r,s.variant)+'"/><rect x="'+(x+w*.12)+'" y="'+(y+h*.11)+'" width="'+(w*.76)+'" height="'+(h*.50)+'" rx="'+Math.min(r*.55,33)+'"/><circle cx="'+(CX+s.buttonX*w)+'" cy="'+(CY+s.buttonY*h)+'" r="14"/></g></svg>';
+};
+const board = window.WuyingBoard?.mount($('#freeBoard'),{
+  getSketch:currentControlSvg,onToast:toast,
+  onZoom(scale){$('#zoomReset').textContent=Math.round(scale*100)+'%';},
+  onSelection(selection){$('#controlSource').textContent=selection?.title || '当前方案草图';window.dispatchEvent(new Event('controlsourcechange'));}
+});
+window.WuyingWorkbench={board,showBoard:()=>setView('board'),getCurrentSketch:currentControlSvg};
+showReference();renderPrefs();setView(board?'board':'model');refresh();
+if(board)$('#tab-generate').click();
 })();
-

@@ -1,6 +1,7 @@
 (function () {
   'use strict';
   const workbench = window.WuyingWorkbench;
+  const endpointKey='wuying.comfyEndpoint'+(workbench?.demo?'-demo':'');
   if (!workbench?.board) return;
   const board = workbench.board;
   const comfy = window.WuyingComfy;
@@ -25,7 +26,7 @@
   let sourceVersion = 0;
 
   endpoint.value = 'http://127.0.0.1:8188';
-  try { endpoint.value = localStorage.getItem('wuying.comfyEndpoint') || endpoint.value; } catch {}
+  try { endpoint.value = localStorage.getItem(endpointKey) || endpoint.value; } catch {}
   byId('comfyCorsOrigin').textContent = location.origin === 'null'
     ? '当前是本地文件，请优先从预览链接打开。'
     : '--enable-cors-header ' + location.origin;
@@ -111,7 +112,7 @@
     try {
       const { checkpoints, controlnets } = await comfy.testConnection(address, { signal: controller.signal });
       connectedEndpoint = address;
-      try { localStorage.setItem('wuying.comfyEndpoint', address); } catch {}
+      try { localStorage.setItem(endpointKey, address); } catch {}
       modelOptions(checkpoint, checkpoints, /sd.?1[._-]?5|v1[._-]?5/i);
       modelOptions(controlnet, controlnets, /scribble/i);
       models.hidden = false;

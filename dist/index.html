@@ -4,43 +4,106 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f8f9fc">
-<meta name="description" content="物映产品设计工作台。用桌面音箱探索二维草图、三维造型和材质表达。">
+<meta name="description" content="物映产品设计工作台。手绘重画和固定曲线，在渲染前推演可以继续修改的产品造型。">
 <title>物映 · 产品设计工作台</title>
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="board.css"><link rel="stylesheet" href="generation.css">
+<link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="board.css"><link rel="stylesheet" href="generation.css"><link rel="stylesheet" href="sketch-workspace.css">
 </head>
 <body>
 <div class="app-shell">
   <header class="topbar">
     <div class="brand"><div class="brand-mark"><i data-icon="logo"></i></div><div><strong>物映</strong><span>WUYING STUDIO</span></div></div>
-    <div class="project-crumb"><span>工作台</span><i data-icon="chevron"></i><strong>桌面音箱 · 造型探索</strong></div>
-    <div class="top-actions"><span class="badge preview-badge"><b></b> 交互预览</span><button class="btn btn-primary" id="export"><i data-icon="download"></i><span>导出视图</span></button></div>
+    <div class="project-crumb"><span>工作台</span><i data-icon="chevron"></i><strong>产品概念造型</strong></div>
+    <div class="top-actions"><a class="preview-link" id="demoLink" href="?demo=1">操作示例</a><button class="btn btn-primary" id="export"><i data-icon="download"></i><span>导出视图</span></button></div>
   </header>
   <div class="workspace">
     <aside class="sidebar" aria-label="项目方案">
-      <div class="side-heading"><div class="eyebrow">DESIGN STUDY / 01</div><h1>造型方案</h1><p>桌面音箱概念设计</p></div>
-      <div class="variant-list" id="variants" aria-label="方案列表"></div>
-      <div class="asset-list"><div class="asset-title"><strong>参考素材</strong><button class="icon-btn" id="addReference" title="添加参考图片" aria-label="添加参考图片"><i data-icon="plus"></i></button></div>
-      <button class="asset-card" id="openReference"><img id="referenceThumb" src="assets/reference.jpg" alt=""><span><strong id="referenceName">工业造型研究</strong><small>参考图片</small></span><i data-icon="chevron"></i></button><input type="file" id="referenceInput" accept="image/*" hidden></div>
+      <div class="side-heading">
+        <div class="eyebrow">项目文件</div><h1>草稿与修改稿</h1>
+        <p>每份修改稿都可以继续编辑。</p>
+      </div>
+      <details class="base-launch" id="baseLaunch">
+        <summary><i data-icon="plus"></i> 新建草稿</summary>
+        <div class="base-options">
+          <button type="button" data-base-profile="rounded">圆润轮廓 <span>流畅的曲面</span></button>
+          <button type="button" data-base-profile="rectilinear">方正轮廓 <span>清晰的平直边</span></button>
+          <button type="button" data-base-profile="tapered">楔形轮廓 <span>有方向的比例</span></button>
+          <button type="button" id="startPen">在画布上起稿 <span>钢笔 · 点起点闭合</span></button>
+        </div>
+      </details>
+      <div class="sketch-history" id="sketchHistory" aria-label="草稿列表"></div>
+      <div class="demo-guide" id="demoGuide" hidden>
+        <strong>试一次手绘改线</strong>
+        <ol><li>保持默认选中的 P01。</li><li>打开「手绘改线」，沿外侧画到 P02。</li><li>另存修改稿，再试规则推演。</li></ol>
+      </div>
+      <details class="legacy-templates">
+        <summary>参考素材与旧模板</summary>
+        <div class="variant-list" id="variants" aria-label="模板方案列表"></div>
+        <div class="asset-list"><div class="asset-title"><strong>参考素材</strong><button class="icon-btn" id="addReference" title="添加参考图片" aria-label="添加参考图片"><i data-icon="plus"></i></button></div>
+        <button class="asset-card" id="openReference"><img id="referenceThumb" src="assets/reference.jpg" alt=""><span><strong id="referenceName">工业造型研究</strong><small>参考图片</small></span><i data-icon="chevron"></i></button><input type="file" id="referenceInput" accept="image/*" hidden></div>
+      </details>
       <div class="side-footer"><span class="save-dot"></span><span id="saveText">自动保存在此浏览器</span></div>
     </aside>
     <main class="center" aria-label="编辑画布">
       <div class="canvas-toolbar">
-        <div class="segmented" aria-label="画布视图"><button data-view="board" class="is-active"><i data-icon="board"></i>自由画布</button><button data-view="sketch"><i data-icon="pen"></i>二维草图</button><button data-view="model"><i data-icon="cube"></i>三维预览</button></div>
+        <div class="segmented" aria-label="画布视图"><button data-view="board" class="is-active"><i data-icon="board"></i>自由画布</button><button data-view="sketch"><i data-icon="pen"></i>二维模板</button><button data-view="model"><i data-icon="cube"></i>三维模板</button></div>
         <div class="toolbar-actions"><button class="icon-btn" id="undo" title="撤销 Ctrl+Z" aria-label="撤销"><i data-icon="undo"></i></button><button class="icon-btn" id="redo" title="重做 Ctrl+Shift+Z" aria-label="重做"><i data-icon="redo"></i></button><span class="toolbar-divider"></span><button class="icon-btn" id="resetView" title="重置视角" aria-label="重置视角"><i data-icon="target"></i></button></div>
       </div>
       <div class="stage" id="stage">
         <div class="stage-label"><span class="stage-kicker" id="stageKicker">PERSPECTIVE</span><strong id="stageTitle">A01 / 圆角盒体</strong></div>
         <canvas id="model" tabindex="0" role="img" aria-label="桌面音箱三维模型，拖动或用方向键旋转"></canvas>
         <svg id="sketch" viewBox="0 0 720 570" preserveAspectRatio="xMidYMid meet" role="img" aria-label="桌面音箱可编辑二维正视图" hidden></svg>
-        <div id="freeBoard" hidden></div><div class="stage-caption"><i data-icon="move"></i><span id="stageHint">拖动旋转 · 滚轮缩放</span></div>
+        <div id="freeBoard" hidden></div>
+        <div class="sheet-label" id="sheetLabel" hidden><span>编辑中的草稿</span><strong id="sheetTitle"></strong><small id="sheetTag"></small></div><div class="stage-caption"><i data-icon="move"></i><span id="stageHint">拖动旋转 · 滚轮缩放</span></div>
         <div class="viewport-tools"><button class="icon-btn" id="zoomOut" title="缩小" aria-label="缩小"><i data-icon="minus"></i></button><button class="zoom-value" id="zoomReset" title="恢复 100%">100%</button><button class="icon-btn" id="zoomIn" title="放大" aria-label="放大"><i data-icon="plus"></i></button></div>
       </div>
+      <section class="candidate-tray" id="candidateTray" aria-label="候选对比" hidden>
+        <div class="tray-head"><div><h2>候选对比 <span id="candidateCount"></span></h2><p>点一张在画布叠看。灰线是原稿，紫线是候选。</p></div><button type="button" class="btn btn-primary" id="keepCandidate">另存为修改稿</button><button type="button" class="icon-btn" id="closeCandidates" title="关闭候选对比" aria-label="关闭候选对比"><i data-icon="close"></i></button></div>
+        <div class="candidate-grid" id="candidateGrid" role="group" aria-label="选择一个候选"></div>
+      </section>
       <div class="statusbar"><span><i data-icon="link"></i> <span id="linkState">二维 / 三维联动</span></span><span id="dimensionReadout">140 × 110 × 76 mm</span></div>
     </main>
     <aside class="inspector" aria-label="属性">
-      <div class="inspector-head"><div class="eyebrow">PROPERTIES</div><h2>属性面板</h2></div>
-      <div class="inspector-tabs" role="tablist" aria-label="属性分类"><button role="tab" aria-selected="false" aria-controls="panel-generate" id="tab-generate" data-panel="generate"><i data-icon="spark"></i>AI 出图</button><button role="tab" aria-selected="true" aria-controls="panel-shape" id="tab-shape" data-panel="shape" class="is-active">造型</button><button role="tab" aria-selected="false" aria-controls="panel-finish" id="tab-finish" data-panel="finish">材质灯光</button><button role="tab" aria-selected="false" aria-controls="panel-assistant" id="tab-assistant" data-panel="assistant"><i data-icon="spark"></i>助手</button></div>
+      <div class="inspector-head"><div class="eyebrow">工作步骤</div><h2 id="inspectorTitle">调整草稿</h2></div>
+      <div class="inspector-tabs" role="tablist" aria-label="工作步骤"><button role="tab" aria-selected="true" aria-controls="panel-derive" id="tab-derive" data-panel="derive" class="is-active">推演</button><button role="tab" aria-selected="false" aria-controls="panel-generate" id="tab-generate" data-panel="generate">AI 出图</button><button role="tab" aria-selected="false" aria-controls="panel-shape" id="tab-shape" data-panel="shape">尺寸</button><button role="tab" aria-selected="false" aria-controls="panel-finish" id="tab-finish" data-panel="finish">材质灯光</button><button role="tab" aria-selected="false" aria-controls="panel-assistant" id="tab-assistant" data-panel="assistant">助手</button></div>
+      <section id="panel-derive" class="panel sketch-panel" role="tabpanel" aria-labelledby="tab-derive">
+        <div class="sketch-source" id="sketchSource">
+          <span class="source-symbol"><i data-icon="pen"></i></span>
+          <div><strong id="sourceTitle">正在读取草稿</strong><small id="sourceDetail"></small></div>
+        </div>
+        <div class="work-modes" role="group" aria-label="修改方法">
+          <button type="button" id="ruleMode" aria-pressed="true">规则推演</button>
+          <button type="button" id="handMode" aria-pressed="false">手绘改线</button>
+        </div>
+        <fieldset class="sketch-section" id="pinControls">
+          <legend>固定要保留的部分</legend>
+          <div class="anchor-select-row"><label for="anchorChoice">起始锚点</label><select id="anchorChoice"></select></div>
+          <div class="pin-actions">
+            <button type="button" id="pinAnchor" aria-pressed="false"><i data-icon="lock"></i><span>固定此点</span></button>
+            <button type="button" id="pinSegment" aria-pressed="false"><i data-icon="lock"></i><span>固定下一段</span></button>
+          </div>
+          <p class="sketch-note" id="pinNote">固定一段会保留两端和曲线手柄。</p>
+        </fieldset>
+        <section class="sketch-section" id="ruleOptions" aria-label="生成候选的规则">
+          <h3>指定怎么变</h3>
+          <fieldset class="direction-pick"><legend class="sr-only">横向变化方向</legend>
+            <label><input type="radio" name="sketchDirection" value="narrow"><span>收窄</span></label>
+            <label><input type="radio" name="sketchDirection" value="both" checked><span>双向</span></label>
+            <label><input type="radio" name="sketchDirection" value="wide"><span>放宽</span></label>
+          </fieldset>
+          <div class="sketch-slider"><div><label for="sketchWidth">横向幅度</label><output id="widthValue" for="sketchWidth">16%</output></div><input type="range" id="sketchWidth" min="0" max="32" step="1" value="16"></div>
+          <div class="sketch-slider"><div><label for="sketchBend">手柄长度变化</label><output id="bendValue" for="sketchBend">14%</output></div><input type="range" id="sketchBend" min="0" max="32" step="1" value="14"></div>
+          <button type="button" class="btn btn-primary wide" id="generateSketch"><i data-icon="spark"></i>生成候选</button>
+          <p class="sketch-note" id="ruleStatus" role="status">最多给出 3 份通过轮廓检查的候选。</p>
+        </section>
+        <section class="sketch-section hand-options" id="handOptions" hidden>
+          <h3 id="handTarget">沿轮廓重画一段</h3>
+          <p class="sketch-note" id="handStatus" role="status">从高亮曲线的任一端点画到另一端，松开后预览。端点会自动吸附。</p>
+          <button type="button" class="btn btn-primary wide" id="saveHand" disabled>另存手绘修改稿</button>
+          <button type="button" class="btn btn-ghost wide" id="clearHand" disabled>清除笔迹</button>
+        </section>
+        <div class="sketch-next"><button type="button" id="renderFromSketch"><span>用选中草稿出图</span><i data-icon="chevron"></i></button></div>
+      </section>
 <section id="panel-generate" class="panel" role="tabpanel" aria-labelledby="tab-generate" hidden>
  <div class="control-section ai-head"><div class="ai-eyebrow">RENDER STUDIO <span class="ai-connection"><b id="connectionDot"></b><span id="connectionLabel">未连接</span></span></div><h3>草图出图</h3><p>从自由画布选取草图或曲线，用它约束图像的轮廓。</p></div>
  <div class="control-section"><div class="control-heading"><h3>控形输入</h3><span>CONTROLNET</span></div>
@@ -50,7 +113,7 @@
   <div class="range-row ai-influence"><div class="range-label"><label for="controlStrength">轮廓约束强度</label><output id="strengthReadout" for="controlStrength">0.85</output></div><input id="controlStrength" type="range" min="0.1" max="1" step="0.05" value="0.85"><div class="ai-endpoints"><span>更自由</span><span>更贴合</span></div></div>
  </div>
  <div class="control-section ai-prompt-section"><div class="control-heading"><h3><label for="renderPrompt">画面描述</label></h3></div>
-  <textarea id="renderPrompt" rows="3" placeholder="描述材质、光照和摄影场景">A compact rounded desktop speaker, satin brushed aluminum, dark perforated grille, soft studio light, warm gray backdrop, industrial product render</textarea>
+  <textarea id="renderPrompt" rows="3" placeholder="描述材质、光照和摄影场景">Industrial product concept, follow the supplied outline, satin brushed aluminum, soft studio light, warm gray backdrop, clean product render</textarea>
   <div class="prompt-presets" aria-label="渲染预设"><button type="button" data-render-preset="metal">金属棚拍</button><button type="button" data-render-preset="fabric">织物柔光</button><button type="button" data-render-preset="clay">灰模研究</button></div>
  </div>
  <div class="control-section ai-run"><button type="button" class="btn btn-primary wide" id="generateRender"><i data-icon="spark"></i>生成效果图</button><button type="button" class="btn btn-ghost wide" id="stopRender" hidden>停止等待</button><p id="comfyStatus" class="constraint-note" role="status">连接 ComfyUI 后可运行草图控形出图。</p></div>
@@ -62,7 +125,7 @@
   <p class="constraint-note">如果连接提示跨域错误，请使用允许此网页来源的 ComfyUI 启动参数。<code id="comfyCorsOrigin"></code></p>
  </details>
 </section>
-      <section id="panel-shape" class="panel" role="tabpanel" aria-labelledby="tab-shape">
+      <section id="panel-shape" class="panel" role="tabpanel" aria-labelledby="tab-shape" hidden>
         <div class="control-section"><div class="control-heading"><h3>主体尺寸</h3><span>MM</span></div><div id="shapeRanges"></div></div>
         <div class="control-section"><div class="control-heading"><h3>部件约束</h3><span>01</span></div><label class="constraint-row"><i data-icon="lock"></i><span><strong>固定旋钮位置</strong><small>缩放主体时保留旋钮坐标</small></span><input type="checkbox" class="switch" id="lockButton" checked></label><p class="constraint-note" id="constraintNote"></p></div>
         <div class="control-section compact-section"><div class="control-heading"><h3>工作方式</h3></div><p>在二维视图拖动轮廓控制点，或在这里输入精确尺寸。两个视图使用同一份参数。</p></div>
@@ -82,6 +145,6 @@
 <div class="toast" id="toast" role="status" hidden></div>
 <dialog class="dialog" id="referenceDialog" aria-labelledby="dialogTitle"><div class="dialog-head"><strong id="dialogTitle">参考素材</strong><button class="icon-btn" id="closeReference" aria-label="关闭"><i data-icon="close"></i></button></div><img id="dialogImage" alt="产品造型参考"><p id="referenceCredit">桌面音箱造型参考 · 概念示意</p></dialog>
 <script src="vendor/paper-core.js"></script><script src="renderer.js"></script>
-<script src="board.js"></script><script src="comfy.js"></script><script src="app.js"></script><script src="generation.js"></script>
+<script src="sketch-rules.js"></script><script src="board.js"></script><script src="comfy.js"></script><script src="app.js"></script><script src="generation.js"></script><script src="sketch-workspace.js"></script>
 </body>
 </html>

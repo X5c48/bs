@@ -1,10 +1,13 @@
 (() => {
 'use strict';
 const ns='http://www.w3.org/2000/svg';
+const rules=window.WuyingSketchRules;
 const STORE='wuying-free-board-v2';
+const BASE_TITLES={rounded:'圆润轮廓',rectilinear:'方正轮廓',tapered:'楔形轮廓'};
 const MAX_ITEMS=24;
 const icon={
  select:'<path d="m5 3 15 9-7 1.5L9 20z"/>',
+ redraw:'<path d="m14 5 5 5M5 19l4.5-1L20 7.5l-3.5-3.5L6 14.5 5 19Zm3 0c3 2 7 2 11-1"/>',
  pen:'<path d="m5 18 3-8 8-7 5 5-7 8-9 2Zm3-8 6 6M5 18l5-5"/>',
  pan:'<path d="M7 13V7a1.4 1.4 0 0 1 2.8 0v4-6a1.4 1.4 0 0 1 2.8 0v6-4.5a1.4 1.4 0 0 1 2.8 0v5-2.5a1.4 1.4 0 0 1 2.8 0v5c0 4-2.4 6-5.5 6H12c-2.2 0-3.8-1-5-3l-2-3.2a1.6 1.6 0 0 1 2.7-1.6l1.3 1.9"/>',
  sketch:'<rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 9h6m-6 4h6m-6 4h4"/>',
@@ -12,21 +15,14 @@ const icon={
  delete:'<path d="M5 7h14m-12 0 1 13h8l1-13M9 7V4h6v3m-5 3v7m4-7v7"/>'
 };
 const svgIcon=n=>'<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'+icon[n]+'</svg>';
-const tools=[['select','选择','V'],['pen','钢笔','P'],['pan','抓手','H']];
+const tools=[['select','选点','V'],['redraw','手绘改线','B'],['pen','钢笔','P'],['pan','抓手','H']];
 const actions=[['sketch','加入草图'],['image','添加图片'],['delete','删除对象']];
 const limit=(n,min,max)=>Math.min(max,Math.max(min,n));
 const copy=pt=>({x:pt.x,y:pt.y});
 const svgUri=source=>'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(source);
 const uid=()=>globalThis.crypto?.randomUUID?.()??String(Date.now())+'-'+Math.random().toString(36).slice(2);
 const svgEl=(name,attributes={})=>{const element=document.createElementNS(ns,name);for(const [k,v] of Object.entries(attributes))element.setAttribute(k,v);return element;};
-function curveData(item){
- const [first,...rest]=item.nodes;if(!first)return '';
- const coordinates=pt=>pt.x.toFixed(2)+' '+pt.y.toFixed(2);
- let d='M '+coordinates(first.point), previous=first;
- for(const next of rest){d+=' C '+coordinates(previous.out)+' '+coordinates(next.in)+' '+coordinates(next.point);previous=next;}
- if(item.closed&&rest.length>1)d+=' C '+coordinates(previous.out)+' '+coordinates(first.in)+' '+coordinates(first.point)+' Z';
- return d;
-}
+const curveData=rules.pathData;
 function validSource(src){
  return typeof src==='string'&&src.length<2500000&&/^(?:blob:|data:image\/(?:png|jpe?g|gif|webp|svg\+xml)[;,]|assets\/[A-Za-z0-9_.-]+$)/i.test(src);
 }
@@ -65,7 +61,8 @@ function transformPixels(ctx,width,height,edges){
  }
  ctx.putImageData(frame,0,0);
 }
-function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}={}){
+function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},demo=false}={}){
+ const storageKey=STORE+(demo?'-demo':'');
  root.classList.add('wb-board');
  root.setAttribute('tabindex','0');
  root.setAttribute('aria-label','自由设计画布');
@@ -76,55 +73,77 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
  '<div class="wb-board-status" aria-live="polite"></div><input class="wb-upload" type="file" accept="image/*" hidden>';
  const viewport=root.querySelector('.wb-viewport'),world=root.querySelector('.wb-world'),layer=root.querySelector('.wb-svg'),cards=root.querySelector('.wb-cards'),status=root.querySelector('.wb-board-status'),curveActions=root.querySelector('.wb-curve-actions'),upload=root.querySelector('.wb-upload');
  let items=[], selectedId=null, anchorIndex=0, draft=null, tool='select', drag=null, space=false;
- let x=0,y=0,z=1,ready=false,saveTimer,pendingFocus=null;
+ let x=0,y=0,z=1,ready=false,saveTimer,pendingFocus=null,autoFit=true;
+ let preview=null, handDraft=null;
+ const activeVersions=new Map();
+ const selection=()=>items.find(it=>it.id===selectedId);
+ const selectedCurve=()=>selection()?.type==='curve'?selection():null;
+ const familyOf=it=>it.familyId||it.id;
+ const pointLabel=index=>'P'+String(index+1).padStart(2,'0');
+ const rememberCurve=it=>{if(it?.type==='curve')activeVersions.set(familyOf(it),it.id);};
  function currentSketch(){
    const svg=getSketch?.();
    if(typeof svg!=='string'||!svg.includes('<svg'))throw new Error('当前草图无法读取');
    return svgUri(svg);
  }
- function sample(){
-   let src='';
-   try{src=currentSketch();}catch{}
-   return [
-     {id:'ref',type:'image',title:'音箱造型参考',role:'REFERENCE',x:26,y:145,w:246,h:236,src:'assets/reference.jpg'},
-     {id:'seed',type:'sketch',title:'初始方案草图',role:'SKETCH',x:324,y:99,w:340,h:276,src},
-     {id:'render',type:'image',title:'材质与灯光效果',role:'出图示例',x:718,y:145,w:280,h:236,src:'assets/render-example.jpg'}
-   ];
+ function baseSketch(profile, withPin=false){
+   return {id:uid(),type:'curve',title:BASE_TITLES[profile]||BASE_TITLES.rounded,
+     ...rules.createBase(profile,withPin)};
  }
  function load(){
-   try{const p=JSON.parse(localStorage.getItem(STORE)||'null');if(Array.isArray(p?.items)){
+   try{const p=JSON.parse(localStorage.getItem(storageKey)||'null');if(Array.isArray(p?.items)){
      items=p.items.slice(0,MAX_ITEMS).filter(it=>it&&typeof it.id==='string'&&typeof it.title==='string'&&['image','sketch','curve'].includes(it.type)&&
       (it.type==='curve'?Array.isArray(it.nodes)&&it.nodes.length<=100&&it.nodes.every(n=>['point','in','out'].every(k=>Number.isFinite(n?.[k]?.x)&&Number.isFinite(n?.[k]?.y))):validSource(it.src)&&[it.x,it.y,it.w,it.h].every(Number.isFinite)));
      if(items.length||p.initialized){
        const seed=items.find(it=>it.id==='seed');if(seed)seed.title='初始方案草图';
        const example=items.find(it=>it.id==='render');if(example){example.title='材质与灯光效果';example.role='出图示例';}
-       selectedId=items.some(it=>it.id===p.selection)?p.selection:null;return;
+       if(Array.isArray(p.activeVersions))for(const id of p.activeVersions){
+         rememberCurve(items.find(it=>it.id===id));
+       }
+       selectedId=items.some(it=>it.id===p.selection)?p.selection:null;
+       rememberCurve(selection());return;
      }
    }}catch{}
-   items=sample();selectedId='seed';
+   const base=baseSketch('rounded',true);
+   items=[base];selectedId=base.id;rememberCurve(base);
  }
  function flushSave(){
    clearTimeout(saveTimer);
    saveTimer=undefined;
-   try{localStorage.setItem(STORE,JSON.stringify({initialized:true,selection:selectedId,items:items.filter(it=>it.type==='curve'||(it.src&&!it.src.startsWith('blob:')))}));}catch{}
+   try{
+     localStorage.setItem(storageKey,JSON.stringify({initialized:true,selection:selectedId,
+       activeVersions:[...activeVersions.values()],items:items.filter(it=>it.type==='curve'||(it.src&&!it.src.startsWith('blob:')))}));
+     return true;
+   }catch{return false;}
  }
  function save(){
    clearTimeout(saveTimer);
    saveTimer=setTimeout(flushSave,100);
  }
  window.addEventListener('pagehide',()=>{if(saveTimer)flushSave();});
- const selection=()=>items.find(it=>it.id===selectedId);
  function notifySelection(){
    const it=selection();
    onSelection(it?{title:it.title,type:it.type}:{title:'当前方案草图',type:'sketch'});
-   const label=tool==='pen'?(draft?'拖动落点创建切线，Enter 完成':'点击落点，拖动生成切线'):tool==='pan'?'拖动平移 · 滚轮缩放':it?.type==='curve'?'拖动锚点或紫色切线手柄':it?'选中：'+it.title+' · 可用作控形输入':'拖动空白处平移 · 滚轮缩放';
+   let label='拖动空白处平移 · 滚轮缩放';
+   if(it?.type==='curve')label='拖动锚点或手柄 · 滚轮缩放';
+   else if(it)label='选中 '+it.title+' · 可作出图输入';
+   if(tool==='pen')label=draft?'拖动落点画出切线，点击起点闭合':'点击落点，拖动生成切线';
+   if(tool==='pan')label='拖动平移 · 滚轮缩放';
+   if(tool==='redraw'){
+     if(!it?.closed||it.type!=='curve')label='先选中一份闭合草稿';
+     else if(rules.pinSpec(it).segments.includes(anchorIndex))label='这段已固定，请换一段或解除固定';
+     else label=handDraft?.candidate?'笔迹已转成可编辑曲线 · 可另存为修改稿':
+       '从 '+pointLabel(anchorIndex)+' 到 '+pointLabel((anchorIndex+1)%it.nodes.length)+' 重画这一段';
+   }
    status.textContent=label;
    root.dataset.boardTool=tool;curveActions.hidden=!draft;
    root.querySelector('[data-board-action="close"]').disabled=!(draft?.nodes.length>=3);
    root.querySelector('[data-board-action="delete"]').disabled=!it;
  }
  function select(id,index=0){
-   selectedId=id;anchorIndex=index;
+   if(selectedId!==id||anchorIndex!==index)handDraft=null;
+   if(selectedId!==id)preview=null;
+   selectedId=id;anchorIndex=index;rememberCurve(selection());
    cards.querySelectorAll('[data-board-item]').forEach(el=>{const selected=el.dataset.boardItem===id;el.classList.toggle('is-selected',selected);el.setAttribute('aria-pressed',String(selected));});
    drawCurves();notifySelection();save();
  }
@@ -157,35 +176,75 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
    layer.replaceChildren();drawLinks();
    for(const it of items){
      if(it.type!=='curve')continue;
+     const active=activeVersions.get(familyOf(it));
+     if(active&&it.id!==active)continue;
      const d=curveData(it);
      if(!d)continue;
      layer.append(svgEl('path',{d,class:'wb-curve-hit','data-board-item':it.id}));
-     layer.append(svgEl('path',{d,class:'wb-curve-path'+(it.id===selectedId?' is-selected':''),'data-curve-id':it.id}));
-     if(it.id!==selectedId)continue;
+     const selected=it.id===selectedId;
+     const replacement=selected?(handDraft?.candidate||preview):null;
+     const redrawTarget=selected&&tool==='redraw'&&it.closed;
+     layer.append(svgEl('path',{d,class:'wb-curve-path'+(selected?' is-selected':'')+
+       (replacement||redrawTarget?' is-underlay':''),'data-curve-id':it.id}));
+     if(!selected)continue;
+     const pins=rules.pinSpec(it), locked=rules.lockedIndices(it);
+     if(redrawTarget)layer.append(svgEl('path',{d:rules.segmentPath(it,anchorIndex),class:'wb-redraw-target'}));
+     if(replacement)layer.append(svgEl('path',{d:curveData(replacement),class:'wb-comparison','aria-hidden':'true'}));
+     for(const index of pins.segments){
+       layer.append(svgEl('path',{d:rules.segmentPath(it,index),class:'wb-pinned-edge','data-fixed-segment':index}));
+     }
+     if(redrawTarget&&handDraft?.stroke&&!replacement)layer.append(svgEl('path',{d:inkPath(handDraft.stroke),class:'wb-ink is-invalid'}));
      it.nodes.forEach((node,index)=>{
-       if(index===anchorIndex){
+       if(index===anchorIndex&&!redrawTarget&&!replacement){
          for(const k of ['in','out']){
            const pt=node[k];
            if(Math.hypot(pt.x-node.point.x,pt.y-node.point.y)<2)continue;
            layer.append(svgEl('line',{x1:node.point.x,y1:node.point.y,x2:pt.x,y2:pt.y,class:'wb-handle-line'}));
-           layer.append(svgEl('circle',{cx:pt.x,cy:pt.y,r:5.2,class:'wb-tangent','data-board-item':it.id,'data-board-node':index,'data-board-handle':k}));
+           layer.append(svgEl('circle',{cx:pt.x,cy:pt.y,r:5.2,class:'wb-tangent'+(locked.has(index)?' is-locked':''),'data-board-item':it.id,'data-board-node':index,'data-board-handle':k}));
          }
        }
-       layer.append(svgEl('rect',{x:node.point.x-5,y:node.point.y-5,width:10,height:10,rx:2,class:'wb-anchor'+(index===anchorIndex?' is-current':''),'data-board-item':it.id,'data-board-node':index,'data-board-handle':'point','data-board-anchor':''}));
+       const current=index===anchorIndex;
+       layer.append(svgEl('rect',{x:node.point.x-5,y:node.point.y-5,width:10,height:10,rx:2,
+         class:'wb-anchor'+(current?' is-current':'')+(locked.has(index)?' is-locked':''),
+         'data-board-item':it.id,'data-board-node':index,'data-board-handle':'point','data-board-anchor':''}));
+       if(it.nodes.length<=14||current){
+         const text=svgEl('text',{x:node.point.x+10,y:node.point.y-10,class:'wb-point-label'+(current?' is-current':''),'aria-hidden':'true'});
+         text.textContent=pointLabel(index);
+         layer.append(text);
+       }
      });
    }
+ }
+ function inkPath(points){
+   return points.map((p,i)=>(i?'L':'M')+p.x.toFixed(2)+' '+p.y.toFixed(2)).join(' ');
  }
  function display(){drawCards();drawCurves();notifySelection();}
  function transform(){world.style.transform='translate('+x+'px,'+y+'px) scale('+z+')';onZoom(z);}
  function resetView(){
    const w=viewport.clientWidth,h=viewport.clientHeight;
    if(!w||!h)return;
+   ready=true;autoFit=true;
+   if(selectedCurve()?.nodes.length){fitCurve(selectedCurve());return;}
    z=limit(Math.min((w-34)/1020,(h-145)/350),.47,1.08);
    x=(w-1020*z)/2;y=Math.max(26,(h-485*z)/2);
    if(w<500)x=limit((w-664*z)/2,-185,14);
    ready=true;transform();
    if(selection()?.role==='AI 出图')focusCard(selection());
  }
+ function fitCurve(it){
+   const w=viewport.clientWidth,h=viewport.clientHeight;
+   if(!w||!h||!it?.nodes.length)return;
+   const {x:left,y:top,width,height}=rules.controlBounds(it);
+   const usableWidth=Math.max(45,w-Math.min(156,w*.22));
+   const usableHeight=Math.max(45,h-Math.min(190,h*.43));
+   z=limit(Math.min(usableWidth/Math.max(width,1),usableHeight/Math.max(height,1)),.20,1.65);
+   x=w/2-(left+width/2)*z;
+   y=h*.53-(top+height/2)*z;
+   transform();
+ }
+ new ResizeObserver(()=>{
+   if(autoFit&&!root.hidden)fitCurve(selectedCurve());
+ }).observe(viewport);
  function focusCard(it){
    const w=viewport.clientWidth,h=viewport.clientHeight;
    if(!w||!h){pendingFocus=it;return;}
@@ -196,10 +255,11 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
    else if(left<margin)x+=margin-left;
    if(bottom>h-52)y-=bottom-h+52;
    if(y+it.y*z<105)y+=105-y-it.y*z;
-   pendingFocus=null;transform();
+   autoFit=false;pendingFocus=null;transform();
  }
  function zoom(delta,px=viewport.clientWidth/2,py=viewport.clientHeight/2){
-   const next=limit(Math.round((z+delta)*1000)/1000,.26,2.8);
+   autoFit=false;
+   const next=limit(Math.round((z+delta)*1000)/1000,.20,2.8);
    const ratio=next/z;x=px-(px-x)*ratio;y=py-(py-y)*ratio;z=next;transform();
  }
  function position(event){
@@ -207,22 +267,34 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
  }
  function chooseTool(next){
    if(next!=='pen'&&draft)finish(false);
+   if(tool!==next)handDraft=null;
+   if(next==='redraw'||next==='pen')preview=null;
    tool=next;
+   drawCurves();
    root.querySelectorAll('[data-board-tool]').forEach(btn=>{const active=btn.dataset.boardTool===tool;btn.setAttribute('aria-pressed',String(active));btn.classList.toggle('is-active',active);});
    notifySelection();
  }
  function finish(closed=false){
    if(!draft)return;
-   if(draft.nodes.length<2){items=items.filter(it=>it!==draft);selectedId=null;}
-   else draft.closed=closed&&draft.nodes.length>=3;
+   if(draft.nodes.length<2){
+     items=items.filter(it=>it!==draft);activeVersions.delete(draft.id);selectedId=null;
+   }else if(closed&&draft.nodes.length>=3){
+     const first=draft.nodes[0],last=draft.nodes.at(-1);
+     const dx=(first.point.x-last.point.x)*.30,dy=(first.point.y-last.point.y)*.30;
+     if(!last.explicit)last.out={x:last.point.x+dx,y:last.point.y+dy};
+     if(!first.explicit)first.in={x:first.point.x-dx,y:first.point.y-dy};
+     draft.closed=true;
+   }
    draft=null;
    chooseTool('select');display();save();
  }
  function addNode(point){
    if(!draft){
      if(items.length>=MAX_ITEMS){onToast('画布对象已达上限');return null;}
-     draft={id:uid(),type:'curve',title:'贝塞尔轮廓',nodes:[],closed:false};items.push(draft);selectedId=draft.id;
+     draft={id:uid(),type:'curve',title:'手绘草稿',nodes:[],closed:false};items.push(draft);
+     selectedId=draft.id;preview=null;handDraft=null;rememberCurve(draft);
    }
+   if(draft.nodes.length>=100){onToast('一条轮廓最多可画 100 个锚点');return null;}
    const last=draft.nodes.at(-1);
    if(last&&Math.hypot(point.x-last.point.x,point.y-last.point.y)<4)return null;
    const n={point:copy(point),in:copy(point),out:copy(point),explicit:false};
@@ -263,9 +335,123 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
    catch(e){onToast(e.message);return null;}
  }
  function remove(){
-   if(!selection())return;
-   items=items.filter(it=>it.id!==selectedId);if(draft?.id===selectedId)draft=null;selectedId=null;
+   const item=selection();
+   if(!item)return;
+   items=items.filter(it=>it!==item);
+   if(draft===item)draft=null;
+   if(item.type==='curve'){
+     const family=familyOf(item);
+     activeVersions.delete(family);
+     rememberCurve(items.find(it=>it.type==='curve'&&familyOf(it)===family));
+   }
+   selectedId=null;handDraft=null;preview=null;
    display();save();onToast('已移除画布对象');
+ }
+ function sketchState(){
+   const curve=selectedCurve();
+   return {
+     curve:curve?structuredClone(curve):null, anchor:anchorIndex, tool,
+     hand:handDraft?{ready:!!handDraft.candidate,reason:handDraft.reason}:null,
+     sketches:items.filter(it=>it.type==='curve'&&it!==draft&&it.nodes.length>=2).map(it=>({
+       id:it.id,title:it.title,closed:!!it.closed,parentId:it.parentId,kind:it.kind,edited:it.edited,
+       path:curveData(it),bounds:rules.controlBounds(it)
+     }))
+   };
+ }
+ function openCurve(id,index=0){
+   if(draft)finish(false);
+   const item=items.find(it=>it.type==='curve'&&it.id===id);
+   if(!item)return;
+   chooseTool('select');
+   select(id,index);autoFit=true;fitCurve(item);
+ }
+ function addBase(profile){
+   if(draft)finish(false);
+   if(items.length>=MAX_ITEMS){onToast('画布对象已达上限');return;}
+   const item=baseSketch(profile);
+   const existing=items.filter(it=>it.type!=='curve'||it.nodes.length);
+   if(existing.length){
+     const right=Math.max(...existing.map(it=>{
+       const box=it.type==='curve'?rules.controlBounds(it):{x:it.x,width:it.w};
+       return box.x+box.width;
+     }));
+     const offset=right+135-rules.controlBounds(item).x;
+     for(const node of item.nodes)for(const key of ['point','in','out'])node[key].x+=offset;
+   }
+   items.push(item);
+   openCurve(item.id);
+   flushSave();
+   return item.id;
+ }
+ function pickAnchor(index){
+   const curve=selectedCurve();
+   if(curve&&Number.isInteger(index)&&index>=0&&index<curve.nodes.length)select(curve.id,index);
+ }
+ function togglePin(kind){
+   const curve=selectedCurve();
+   if(!curve||draft||!curve.nodes.length)return;
+   if(kind==='segments'&&!curve.closed&&anchorIndex===curve.nodes.length-1)return;
+   const pins=rules.pinSpec(curve);
+   const at=pins[kind].indexOf(anchorIndex);
+   if(at<0)pins[kind].push(anchorIndex);
+   else pins[kind].splice(at,1);
+   curve.pins=rules.pinSpec({...curve,pins});
+   handDraft=null;preview=null;
+   drawCurves();notifySelection();flushSave();
+ }
+ function setPreview(candidate){
+   preview=candidate;
+   drawCurves();
+ }
+ function saveVersion(candidate,key,kind){
+   const source=selectedCurve();
+   if(!source||rules.sketchKey(source)!==key){
+     onToast('草稿已改动，请重新预览');return null;
+   }
+   if(items.length>=MAX_ITEMS){onToast('画布对象已达上限，请先清理旧稿');return null;}
+   const familyId=familyOf(source);
+   const number=Math.max(0,...items.filter(it=>familyOf(it)===familyId).map(it=>it.versionNo||0))+1;
+   const item={id:uid(),type:'curve',title:'修改稿 '+String(number).padStart(2,'0'),familyId,
+     parentId:source.id,versionNo:number,kind,closed:true,nodes:structuredClone(candidate.nodes),pins:rules.pinSpec(candidate)};
+   const index=anchorIndex;
+   items.push(item);
+   handDraft=null;preview=null;
+   openCurve(item.id,index);
+   const persisted=flushSave();
+   onToast(persisted?'已另存 '+item.title:'修改稿已加入画布，浏览器存储已满。请导出 SVG。');
+   return item.id;
+ }
+ function clearHand(){
+   handDraft=null;drawCurves();notifySelection();
+ }
+ function acceptHand(){
+   if(!handDraft?.candidate)return null;
+   return saveVersion(handDraft.candidate,handDraft.key,'hand');
+ }
+ function beginInk(event, curve, target, point){
+   if(!curve?.closed){onToast('先选中一份闭合草稿');return;}
+   const chosen=target?.dataset.boardHandle==='point'?Number(target.dataset.boardNode):-1;
+   const next=(anchorIndex+1)%curve.nodes.length;
+   if(chosen>=0&&chosen!==anchorIndex&&chosen!==next){pickAnchor(chosen);return;}
+   if(rules.pinSpec(curve).segments.includes(anchorIndex)){
+     onToast('这段已固定，请选择其它线段或解除固定');return;
+   }
+   const start=curve.nodes[anchorIndex].point,end=curve.nodes[next].point;
+   const distance=Math.min(28/z,Math.hypot(start.x-end.x,start.y-end.y)*.42);
+   if([start,end].every(p=>Math.hypot(p.x-point.x,p.y-point.y)>distance)){
+     onToast('请从高亮段的任一端点开始画');return;
+   }
+   clearHand();
+   const path=svgEl('path',{class:'wb-ink','aria-hidden':'true'});
+   layer.append(path);
+   drag={type:'redraw',curve,index:anchorIndex,points:[point],path,distance,key:rules.sketchKey(curve)};
+ }
+ function curveSvg(it){
+   const box=rules.controlBounds(it),pad=Math.max(8,Math.max(box.width,box.height)*.06);
+   const viewBox=[box.x-pad,box.y-pad,box.width+2*pad,box.height+2*pad].map(n=>n.toFixed(2)).join(' ');
+   const svg='<svg xmlns="'+ns+'" viewBox="'+viewBox+'"><path d="'+curveData(it)+
+     '" fill="none" stroke="#222238" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+   return new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
  }
  root.querySelectorAll('[data-board-tool]').forEach(b=>b.addEventListener('click',()=>chooseTool(b.dataset.boardTool)));
  root.querySelector('[data-board-action="sketch"]').addEventListener('click',addCurrentSketch);
@@ -289,6 +475,7 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
    event.preventDefault();root.focus({preventScroll:true});
    const target=event.target.closest('[data-board-item]'),point=position(event);
    if(tool==='pan'||space||event.button===1){drag={type:'pan',cx:event.clientX,cy:event.clientY,x,y};}
+   else if(tool==='redraw')beginInk(event,selectedCurve(),target,point);
    else if(tool==='pen'){
      if(target?.dataset.boardHandle==='point'&&target.dataset.boardItem===draft?.id&&+target.dataset.boardNode===0&&draft.nodes.length>=3){finish(true);return;}
      const n=addNode(point);if(!n)return;drag={type:'new',node:n,start:point};
@@ -296,27 +483,53 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
      const it=items.find(o=>o.id===target.dataset.boardItem);if(!it)return;
      const index=Number(target.dataset.boardNode??0);select(it.id,index);
      if(it.type!=='curve')drag={type:'card',item:it,start:point,x:it.x,y:it.y,element:target};
-     else if(target.dataset.boardHandle)drag={type:'handle',node:it.nodes[index],key:target.dataset.boardHandle,start:point};
+     else if(target.dataset.boardHandle&&!rules.lockedIndices(it).has(index)){
+       const key=target.dataset.boardHandle;
+       drag={type:'handle',item:it,node:it.nodes[index],key,start:point,original:copy(it.nodes[index][key])};
+     }
    }else{select(null);drag={type:'pan',cx:event.clientX,cy:event.clientY,x,y};}
    if(drag){viewport.setPointerCapture(event.pointerId);root.classList.add('is-dragging');}
  });
  viewport.addEventListener('pointermove',event=>{
    if(!drag)return;
-   if(drag.type==='pan'){x=drag.x+event.clientX-drag.cx;y=drag.y+event.clientY-drag.cy;transform();return;}
-   const p=position(event), dx=p.x-drag.start.x,dy=p.y-drag.start.y;
+   if(drag.type==='pan'){autoFit=false;x=drag.x+event.clientX-drag.cx;y=drag.y+event.clientY-drag.cy;transform();return;}
+   const p=position(event);
+   if(drag.type==='redraw'){
+     const last=drag.points.at(-1);
+     if(Math.hypot(p.x-last.x,p.y-last.y)<1.65/z)return;
+     if(drag.points.length>=512)drag.points=drag.points.filter((_,i)=>i%2===0);
+     drag.points.push(p);
+     drag.path.setAttribute('d',inkPath(drag.points));return;
+   }
+   const dx=p.x-drag.start.x,dy=p.y-drag.start.y;
    if(drag.type==='card'){drag.item.x=drag.x+dx;drag.item.y=drag.y+dy;drag.element.style.left=drag.item.x+'px';drag.element.style.top=drag.item.y+'px';drawCurves();}
    else if(drag.type==='new'&&Math.hypot(dx,dy)>3){drag.node.out=copy(p);drag.node.in={x:drag.start.x-dx,y:drag.start.y-dy};drag.node.explicit=true;drawCurves();}
    else if(drag.type==='handle'){
      const n=drag.node,k=drag.key;
-     if(k==='point'){const mx=p.x-n.point.x,my=p.y-n.point.y;n.in.x+=mx;n.in.y+=my;n.out.x+=mx;n.out.y+=my;}
-     n[k]=copy(p);n.explicit=true;drawCurves();
+     const position={x:drag.original.x+dx,y:drag.original.y+dy};
+     if(k==='point'){
+       const mx=position.x-n.point.x,my=position.y-n.point.y;
+       n.in.x+=mx;n.in.y+=my;n.out.x+=mx;n.out.y+=my;
+     }
+     if(dx||dy){drag.changed=true;n.explicit=true;drag.item.edited=true;}
+     n[k]=position;preview=null;drawCurves();
    }
  });
- for(const type of ['pointerup','pointercancel','lostpointercapture'])viewport.addEventListener(type,()=>{
+ for(const type of ['pointerup','pointercancel','lostpointercapture'])viewport.addEventListener(type,event=>{
    if(!drag)return;
-   const changedCurve=drag.type==='handle'||drag.type==='new';
-   drag=null;root.classList.remove('is-dragging');save();
-   if(changedCurve)notifySelection();
+   const done=drag;
+   drag=null;root.classList.remove('is-dragging');
+   if(done.type==='redraw'){
+     if(event.type==='pointerup'){
+       done.points.push(position(event));
+       const result=rules.redraw(done.curve,done.index,done.points,done.distance);
+       handDraft={...result,key:done.key,stroke:done.points};
+     }
+     drawCurves();notifySelection();
+     return;
+   }
+   save();
+   if((done.type==='handle'&&done.changed)||done.type==='new')notifySelection();
  });
  root.addEventListener('keydown',event=>{
    if(event.target.closest('input,textarea,select'))return;
@@ -326,9 +539,15 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
    if(event.key===' '&&event.target.closest('button'))return;
    if(event.key===' '){event.preventDefault();space=true;root.classList.add('wb-space');return;}
    if(event.ctrlKey||event.metaKey||event.altKey)return;
-   if(k==='v'||k==='p'||k==='h'){chooseTool({v:'select',p:'pen',h:'pan'}[k]);event.preventDefault();}
+   const shortcuts={v:'select',b:'redraw',p:'pen',h:'pan'};
+   if(shortcuts[k]){chooseTool(shortcuts[k]);event.preventDefault();}
    if(event.key==='Enter'&&draft){finish(false);event.preventDefault();}
-   if(event.key==='Escape'){if(draft)finish(false);else select(null);}
+   if(event.key==='Escape'){
+     if(draft)finish(false);
+     else if(handDraft)clearHand();
+     else if(tool==='redraw')chooseTool('select');
+     else select(null);
+   }
    if(event.key==='Delete'||event.key==='Backspace'){remove();event.preventDefault();}
    if(event.key.startsWith('Arrow')&&selection()&&selection().type!=='curve'){
      const it=selection(), step=event.shiftKey?16:4;
@@ -358,13 +577,19 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{}}=
  }
  async function exportSelected(){
    const it=selection();
-   if(!it||it.type==='curve')return captureControl();
+   if(it?.type==='curve'&&it.nodes.length>=2)return curveSvg(it);
+   if(!it)return captureControl();
    const image=await imageFrom(it.src);const canvas=document.createElement('canvas');
    canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;canvas.getContext('2d').drawImage(image,0,0);
    return png(canvas);
  }
  load();display();chooseTool('select');
- return {show(){root.hidden=false;if(!ready)resetView();if(pendingFocus)focusCard(pendingFocus);display();},hide(){if(draft)finish(false);root.hidden=true;},addImage,addCurrentSketch,captureControl,exportSelected,resetView,zoom,zoomReset:resetView,getZoom:()=>z};
+ return {
+   show(){root.hidden=false;if(!ready)resetView();if(pendingFocus)focusCard(pendingFocus);display();},
+   hide(){if(draft)finish(false);root.hidden=true;},
+   addImage,addCurrentSketch,captureControl,exportSelected,resetView,zoom,zoomReset:resetView,getZoom:()=>z,
+   sketchState,openCurve,addBase,pickAnchor,togglePin,setPreview,saveVersion,clearHand,acceptHand,setTool:chooseTool
+ };
 }
 window.WuyingBoard={mount};
 })();

@@ -39,7 +39,8 @@ const defaults = () => Object.fromEntries(forms.map(f => {
   const [width,height,depth,radius] = f.size;
   return [f.id,{variant:f.id,width,height,depth,radius,color:f.color,material:f.material,light:74,buttonX:.19,buttonY:.26,lockButton:true}];
 }));
-const key = 'wuying-preview-v1';
+const demo=new URLSearchParams(location.search).get('demo')==='1';
+const key = 'wuying-preview-v1'+(demo?'-demo':'');
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch {}
 let designs = defaults();
@@ -53,7 +54,7 @@ for(const id of Object.keys(designs)){
 let active = Object.hasOwn(designs,saved.active) ? saved.active : 'box';
 let prefs = Array.isArray(saved.prefs) ? saved.prefs.filter(m=>finishes.some(f=>f.id===m)) : [];
 let reference = /^data:image\//.test(saved.reference?.src || '') ? saved.reference : {src:'assets/reference.jpg',name:'工业造型研究'};
-let view = 'model', panel = 'shape', rotation = -24, tilt = -14, zoom = 1;
+let view = 'model', panel = 'derive', rotation = -24, tilt = -14, zoom = 1;
 let before = [], after = [], frame = 0, toastTimer = 0, saveTimer = 0;
 const model = $('#model'), sketch = $('#sketch'), stage = $('#stage');
 const current = () => designs[active];
@@ -136,26 +137,52 @@ $$('[data-color]').forEach(el=>{el.onclick=()=>{change(()=>{current().color=el.d
 function setView(next) {
   view=next;
   model.hidden=next!=='model'; sketch.toggleAttribute('hidden',next!=='sketch');
-  if(next==='board')board?.show();else board?.hide();
   stage.dataset.view=next;
+  if(next==='board')board?.show();else board?.hide();
   $('#undo').hidden=$('#redo').hidden=next==='board';
   $('.toolbar-divider').hidden=next==='board';
   $('#linkState').textContent=next==='board'?'草图 / 参考 / 出图':'二维 / 三维联动';
-  $('#export span').textContent=next==='board'?'导出选中':'导出视图';
+  updateExportLabel();
   $('#zoomReset').textContent=Math.round((next==='board'&&board?board.getZoom():zoom)*100)+'%';
   $('#stageKicker').textContent=next==='board'?'WORKBENCH':next==='model'?'PERSPECTIVE':'ORTHOGRAPHIC / FRONT';
   $('#stageHint').textContent=next==='model'?'拖动旋转 · 滚轮缩放':'拖动控制点编辑轮廓';
   $$('.segmented [data-view]').forEach(el=>{const is=el.dataset.view===next;el.classList.toggle('is-active',is);el.setAttribute('aria-pressed',is);});
   requestDraw();
+  window.dispatchEvent(new Event('sketchstatechange'));
 }
-$$('.segmented [data-view]').forEach(el=>{el.onclick=()=>setView(el.dataset.view);});
-$$('[data-panel]').forEach(el=>{el.onclick=()=>{
-  panel=el.dataset.panel;
-  $$('[data-panel]').forEach(t=>{const is=t.dataset.panel===panel;t.classList.toggle('is-active',is);t.setAttribute('aria-selected',is);});
+const panelTitles={derive:'调整草稿',generate:'渲染出图',shape:'模板尺寸',finish:'材质与灯光',assistant:'方案记录'};
+function setPanel(next){
+  if(next!=='derive'&&board?.sketchState().tool==='redraw')board.setTool('select');
+  panel=next;
+  $('.app-shell').dataset.panel=panel;
+  $('#inspectorTitle').textContent=panelTitles[panel];
+  $$('[data-panel]').forEach(t=>{
+    const is=t.dataset.panel===panel;
+    t.classList.toggle('is-active',is);t.setAttribute('aria-selected',is);t.tabIndex=is?0:-1;
+  });
   $$('.inspector .panel').forEach(p=>{p.hidden=p.id!=='panel-'+panel;});
   if(panel==='finish')setView('model');
-  if(panel==='generate'&&board)setView('board');
+  else if(panel==='shape')setView('sketch');
+  else if((panel==='derive'||panel==='generate')&&board)setView('board');
+  else window.dispatchEvent(new Event('sketchstatechange'));
+}
+function updateExportLabel(){
+  $('#export span').textContent=view==='board'
+    ? (boardSelection?.type==='curve'?'导出 SVG':'导出选中')
+    : '导出视图';
+}
+$$('.segmented [data-view]').forEach(el=>{el.onclick=()=>{
+  const next=el.dataset.view;
+  setPanel(next==='board'?'derive':next==='model'?'finish':'shape');
 };});
+$$('[data-panel]').forEach(el=>{el.onclick=()=>setPanel(el.dataset.panel);});
+$('.inspector-tabs').addEventListener('keydown',e=>{
+  const tabs=$$('[data-panel]'),index=tabs.indexOf(e.target);
+  if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
+  const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:
+    (index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+  tabs[next].click();tabs[next].focus();e.preventDefault();
+});
 function setZoom(next) {
   zoom=Math.round(clamp(next,.6,1.55)*100)/100;
   stage.style.setProperty('--view-zoom',zoom);
@@ -324,7 +351,15 @@ function download(blob,name){
 }
 $('#export').onclick=async()=>{
   const code='物映-'+selected().code;
-  if(view==='board'&&board){try{const blob=await board.exportSelected();download(blob,code+'-画布.png');toast('已导出画布对象');}catch(e){toast(e.message||'无法导出画布对象');}return;}
+  if(view==='board'&&board){
+    try{
+      const blob=await board.exportSelected();
+      const vector=blob.type.startsWith('image/svg+xml');
+      download(blob,vector?'物映-'+boardSelection.title+'.svg':'物映-画布.png');
+      toast(vector?'已导出可编辑 SVG':'已导出画布对象');
+    }catch(e){toast(e.message||'无法导出画布对象');}
+    return;
+  }
   if(view==='sketch'){
     drawSketch();
     download(new Blob([new XMLSerializer().serializeToString(sketch)],{type:'image/svg+xml;charset=utf-8'}),code+'-草图.svg');
@@ -342,12 +377,18 @@ const currentControlSvg = () => {
   const r=Math.min(s.variant==='capsule'?w*.45:s.radius*SCALE,w*.45,h*.45);
   return '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="570" viewBox="0 0 720 570"><rect width="720" height="570" fill="white"/><g fill="none" stroke="black" stroke-width="5" stroke-linejoin="round"><path d="'+vectorProfile(x,y,w,h,r,s.variant)+'"/><rect x="'+(x+w*.12)+'" y="'+(y+h*.11)+'" width="'+(w*.76)+'" height="'+(h*.50)+'" rx="'+Math.min(r*.55,33)+'"/><circle cx="'+(CX+s.buttonX*w)+'" cy="'+(CY+s.buttonY*h)+'" r="14"/></g></svg>';
 };
+let boardSelection=null;
 const board = window.WuyingBoard?.mount($('#freeBoard'),{
-  getSketch:currentControlSvg,onToast:toast,
+  getSketch:currentControlSvg,onToast:toast,demo,
   onZoom(scale){$('#zoomReset').textContent=Math.round(scale*100)+'%';},
-  onSelection(selection){$('#controlSource').textContent=selection?.title || '当前方案草图';window.dispatchEvent(new Event('controlsourcechange'));}
+  onSelection(selection){
+    boardSelection=selection;
+    $('#controlSource').textContent=selection?.title || '当前方案草图';
+    updateExportLabel();
+    window.dispatchEvent(new Event('controlsourcechange'));
+    window.dispatchEvent(new Event('sketchstatechange'));
+  }
 });
-window.WuyingWorkbench={board,showBoard:()=>setView('board'),getCurrentSketch:currentControlSvg};
-showReference();renderPrefs();setView(board?'board':'model');refresh();
-if(board)$('#tab-generate').click();
+window.WuyingWorkbench={board,showBoard:()=>setView('board'),getCurrentSketch:currentControlSvg,setPanel,demo};
+showReference();renderPrefs();setPanel(board?'derive':'finish');refresh();
 })();

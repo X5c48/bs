@@ -161,6 +161,7 @@
     const job = new AbortController();
     activeJob = job;
     const sourceTitle = byId('controlSource').textContent;
+    const source = board.controlSource();
     const settings = {
       endpoint: connectedEndpoint, checkpoint: checkpoint.value, controlnet: controlnet.value,
       strength: Number(strength.value), prompt: description, signal: job.signal,
@@ -176,11 +177,10 @@
       const { blob } = await comfy.generate({ ...settings, sketch });
       const image = await dataUrl(blob);
       if (job.signal.aborted) return;
-      if (!board.addImage(image, 'AI 出图 · ' + sourceTitle)) {
-        throw new Error('已生成效果图，画布对象已达上限。可从 ComfyUI 输出中下载原图。');
-      }
-      workbench.showBoard();
-      message('生成完成，结果已加入自由画布。');
+      const id = board.addImage(image, 'AI 出图 · ' + sourceTitle, source);
+      if (!id) throw new Error('已生成效果图，浏览器画布已达容量上限。原图可从 ComfyUI 输出中下载。');
+      window.dispatchEvent(new CustomEvent('studiorender',{detail:{id,source}}));
+      message('生成完成，可在右侧画板查看。');
     } catch (error) {
       if (!job.signal.aborted) message(error.message || '出图失败，请检查服务状态。', true);
     } finally {

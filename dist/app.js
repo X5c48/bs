@@ -91,9 +91,10 @@ function restore(raw) {
 $('#undo').onclick=()=>{if(!before.length)return;after.push(snapshot());restore(before.pop());};
 $('#redo').onclick=()=>{if(!after.length)return;before.push(snapshot());restore(after.pop());};
 document.addEventListener('keydown',e=>{
-  if(view==='board'||!(e.ctrlKey||e.metaKey)||e.key.toLowerCase()!=='z'||e.target.matches('input,textarea'))return;
+  if(e.defaultPrevented||!(e.ctrlKey||e.metaKey)||e.key.toLowerCase()!=='z'||e.target.matches('input,textarea,[contenteditable]'))return;
   e.preventDefault();
-  (e.shiftKey ? $('#redo') : $('#undo')).click();
+  if(view==='board')board?.stepInk(!e.shiftKey);
+  else (e.shiftKey ? $('#redo') : $('#undo')).click();
 });
 function outlinePath(x,y,w,h,r,kind) {
   if(kind!=='slope') return 'M'+(x+r)+' '+y+'H'+(x+w-r)+'Q'+(x+w)+' '+y+' '+(x+w)+' '+(y+r)+'V'+(y+h-r)+'Q'+(x+w)+' '+(y+h)+' '+(x+w-r)+' '+(y+h)+'H'+(x+r)+'Q'+x+' '+(y+h)+' '+x+' '+(y+h-r)+'V'+(y+r)+'Q'+x+' '+y+' '+(x+r)+' '+y+'Z';
@@ -138,6 +139,8 @@ function setView(next) {
   view=next;
   model.hidden=next!=='model'; sketch.toggleAttribute('hidden',next!=='sketch');
   stage.dataset.view=next;
+  $('.app-shell').dataset.view=next;
+  $('#boardToolSlot').hidden=next!=='board';
   if(next==='board')board?.show();else board?.hide();
   $('#undo').hidden=$('#redo').hidden=next==='board';
   $('.toolbar-divider').hidden=next==='board';
@@ -150,20 +153,25 @@ function setView(next) {
   requestDraw();
   window.dispatchEvent(new Event('sketchstatechange'));
 }
-const panelTitles={derive:'调整草稿',generate:'渲染出图',shape:'模板尺寸',finish:'材质与灯光',assistant:'方案记录'};
+const panelTitles={derive:'草图工具',generate:'渲染设置',iterate:'方案推演',present:'展示输出',shape:'模板尺寸',finish:'材质与灯光',assistant:'方案记录'};
+const phaseLabels={derive:'01 / SKETCH',generate:'02 / RENDER',iterate:'03 / ITERATE',present:'04 / SHOWCASE'};
 function setPanel(next){
   if(next!=='derive'&&board?.sketchState().tool==='redraw')board.setTool('select');
   panel=next;
   $('.app-shell').dataset.panel=panel;
   $('#inspectorTitle').textContent=panelTitles[panel];
-  $$('[data-panel]').forEach(t=>{
+  $('#studioInspectorIndex').textContent=phaseLabels[panel]||'TEMPLATES';
+  $$('button[data-panel]').forEach(t=>{
     const is=t.dataset.panel===panel;
-    t.classList.toggle('is-active',is);t.setAttribute('aria-selected',is);t.tabIndex=is?0:-1;
+    t.classList.toggle('is-active',is);
+    if(t.getAttribute('role')==='tab'){
+      t.setAttribute('aria-selected',String(is));t.tabIndex=is?0:-1;
+    }else t.setAttribute('aria-pressed',String(is));
   });
   $$('.inspector .panel').forEach(p=>{p.hidden=p.id!=='panel-'+panel;});
   if(panel==='finish')setView('model');
   else if(panel==='shape')setView('sketch');
-  else if((panel==='derive'||panel==='generate')&&board)setView('board');
+  else if(Object.hasOwn(phaseLabels,panel)&&board)setView('board');
   else window.dispatchEvent(new Event('sketchstatechange'));
 }
 function updateExportLabel(){
@@ -171,13 +179,9 @@ function updateExportLabel(){
     ? (boardSelection?.type==='curve'?'导出 SVG':'导出选中')
     : '导出视图';
 }
-$$('.segmented [data-view]').forEach(el=>{el.onclick=()=>{
-  const next=el.dataset.view;
-  setPanel(next==='board'?'derive':next==='model'?'finish':'shape');
-};});
-$$('[data-panel]').forEach(el=>{el.onclick=()=>setPanel(el.dataset.panel);});
-$('.inspector-tabs').addEventListener('keydown',e=>{
-  const tabs=$$('[data-panel]'),index=tabs.indexOf(e.target);
+$$('button[data-panel]').forEach(el=>{el.onclick=()=>setPanel(el.dataset.panel);});
+$('.studio-flow').addEventListener('keydown',e=>{
+  const tabs=$$('.studio-flow [data-panel]'),index=tabs.indexOf(e.target);
   if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;
   const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:
     (index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
@@ -379,7 +383,8 @@ const currentControlSvg = () => {
 };
 let boardSelection=null;
 const board = window.WuyingBoard?.mount($('#freeBoard'),{
-  getSketch:currentControlSvg,onToast:toast,demo,
+  getSketch:currentControlSvg,onToast:toast,demo,toolSlot:$('#boardToolSlot'),
+  onScene(){window.dispatchEvent(new Event('boardscenechange'));},
   onZoom(scale){$('#zoomReset').textContent=Math.round(scale*100)+'%';},
   onSelection(selection){
     boardSelection=selection;
@@ -389,6 +394,6 @@ const board = window.WuyingBoard?.mount($('#freeBoard'),{
     window.dispatchEvent(new Event('sketchstatechange'));
   }
 });
-window.WuyingWorkbench={board,showBoard:()=>setView('board'),getCurrentSketch:currentControlSvg,setPanel,demo};
+window.WuyingWorkbench={board,showBoard:()=>setView('board'),getCurrentSketch:currentControlSvg,setPanel,demo,download,toast};
 showReference();renderPrefs();setPanel(board?'derive':'finish');refresh();
 })();

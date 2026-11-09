@@ -68,10 +68,10 @@
         if (sketch.kind) button.classList.add('is-revision');
         const thumb = document.createElement('span');
         thumb.className = 'sketch-file-thumb';
-        thumb.append(thumbnail(viewBox([sketch.bounds]), [[sketch.path, 'mini-outline']]));
+        thumb.append(thumbnail(viewBox([sketch.bounds]), [[sketch.path+' '+sketch.inkPath, 'mini-outline']]));
         const meta = document.createElement('span');
         const type = sketch.kind === 'hand' ? '手绘改线' : sketch.kind === 'rules' ? '规则推演' :
-          sketch.closed ? '基础稿' : '开放曲线';
+          sketch.closed ? '基础稿' : sketch.blank ? '自由草稿' : '开放曲线';
         const parent = titles.get(sketch.parentId);
         meta.append(text('strong', sketch.title), text('small', sketch.edited ? type + ' · 已手改' : type));
         if (parent) meta.append(text('small', '来自 ' + parent, 'parent-name'));
@@ -87,7 +87,7 @@
 
   function renderAnchor(state) {
     const { curve, anchor } = state;
-    $('pinControls').disabled = !curve || state.tool === 'pen';
+    $('pinControls').disabled = !curve?.nodes.length || state.tool === 'pen';
     if (!curve?.nodes.length) {
       if (anchorKey) anchorChoice.replaceChildren();
       anchorKey = '';
@@ -136,6 +136,7 @@
     const state = board.sketchState();
     const { curve, anchor, tool, hand } = state;
     const handMode = tool === 'redraw';
+    if(handMode)$('vectorTools').open=true;
     const isBoard = stage.dataset.view === 'board';
     if (handMode && shell.dataset.panel !== 'derive' && isBoard) {
       workbench.setPanel('derive');
@@ -145,16 +146,17 @@
     const fixedSegment = renderAnchor(state);
     const closed = !!curve?.closed;
     const curveStatus = closed ? curve.nodes.length + ' 个锚点 · 闭合轮廓' :
+      curve?.blank ? (curve.ink?.length||0)+' 笔 · 自由画板' :
       curve ? '开放曲线 · 可以调整锚点' : '新建基础稿，或用钢笔画一个闭合轮廓';
     $('sourceTitle').textContent = curve?.title || '请选择一份草稿';
     $('sourceDetail').textContent = curveStatus;
     $('sheetLabel').hidden = !isBoard || !curve;
     if (curve) {
       $('sheetTitle').textContent = curve.title;
-      $('sheetTag').textContent = closed ? '矢量草稿' : '开放曲线';
+      $('sheetTag').textContent = closed ? '矢量草稿' : curve.blank ? '自由画板' : '开放曲线';
     }
     if (isBoard) {
-      $('linkState').textContent = handMode ? '手绘改线 · 笔迹转成曲线' : '自由画布 · 可编辑曲线';
+      $('linkState').textContent = handMode ? '手绘改线 · 笔迹转成曲线' : '左右画板同步';
       $('dimensionReadout').textContent = curve ? curveStatus : '';
     }
     $('ruleMode').setAttribute('aria-pressed', String(!handMode));
@@ -163,7 +165,7 @@
     $('ruleOptions').hidden = handMode;
     $('handOptions').hidden = !handMode;
     $('generateSketch').disabled = !closed;
-    $('renderFromSketch').disabled = !curve;
+    $('renderFromSketch').disabled = !curve || !(curve.nodes.length || curve.ink?.length);
     if (handMode) {
       $('handTarget').textContent = closed
         ? '重画 ' + label(anchor) + ' → ' + label((anchor + 1) % curve.nodes.length)
@@ -239,10 +241,11 @@
     history.querySelector('[aria-pressed="true"]')?.focus();
   });
   $('baseLaunch').addEventListener('click', event => {
-    const button = event.target.closest('[data-base-profile], #startPen');
+    const button = event.target.closest('[data-base-profile], #startPen, #startBlank');
     if (!button) return;
     workbench.setPanel('derive');
     if (button.dataset.baseProfile) board.addBase(button.dataset.baseProfile);
+    else if(button.id==='startBlank'){board.addBlank();$('freeBoard').focus({preventScroll:true});}
     else {
       board.setTool('pen');
       $('freeBoard').focus();

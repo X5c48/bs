@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#1b1b1f">
-<meta name="description" content="物映产品设计工作台。边画边看材质，沿草图、渲染、推演与展示完成概念设计。">
+<meta name="description" content="物映产品设计工作台。在节点画布上绘制造型，连到实时预览，比较材质与造型。">
 <title>物映 · 产品设计工作台</title>
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="board.css"><link rel="stylesheet" href="generation.css"><link rel="stylesheet" href="sketch-workspace.css"><link rel="stylesheet" href="studio.css">
+<link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="board.css"><link rel="stylesheet" href="generation.css"><link rel="stylesheet" href="sketch-workspace.css"><link rel="stylesheet" href="studio.css"><link rel="stylesheet" href="node-graph.css">
 </head>
 <body>
 <div class="app-shell">
@@ -39,14 +39,15 @@
       </details>
       <section class="studio-layers" aria-label="当前图层">
         <h2>当前图层</h2>
+        <button type="button" data-layer="underlay" aria-pressed="false"><i data-icon="board"></i><span>线稿底图<small>导入</small></span><b>可见</b></button>
         <button type="button" data-layer="ink" aria-pressed="true"><i data-icon="pen"></i><span>自由笔迹<small id="inkCount">0 笔</small></span><b>可见</b></button>
         <button type="button" data-layer="contour" aria-pressed="true"><i data-icon="board"></i><span>基础轮廓<small>矢量</small></span><b>可见</b></button>
       </section>
       <div class="studio-draft-label"><h2>草稿与修改稿</h2></div>
       <div class="sketch-history" id="sketchHistory" aria-label="草稿列表"></div>
       <div class="demo-guide" id="demoGuide" hidden>
-        <strong>跟着画一笔</strong>
-        <ol><li>用画笔在左边补一条线，观察右边。</li><li>到「推演」里切换配色。</li><li>到「展示」播放或导出。</li></ol>
+        <strong>试一次节点连线</strong>
+        <ol><li>在草图节点里画一笔，观察相连的预览。</li><li>试试「线稿」和「造型」。</li><li>添加新草图，把它的输出拖到预览输入口。</li></ol>
       </div>
       <details class="legacy-templates">
         <summary>参考素材与旧模板</summary>
@@ -59,12 +60,32 @@
     </aside>
     <main class="center" aria-label="编辑画布">
       <div class="canvas-toolbar">
-        <div class="studio-canvas-name"><span>STUDIO</span><strong>双画板工作台</strong></div>
+        <div class="studio-canvas-name"><span>STUDIO</span><strong>节点画布</strong></div>
         <div id="boardToolSlot"></div>
         <div class="toolbar-actions"><button class="icon-btn" id="undo" title="撤销 Ctrl+Z" aria-label="撤销"><i data-icon="undo"></i></button><button class="icon-btn" id="redo" title="重做 Ctrl+Shift+Z" aria-label="重做"><i data-icon="redo"></i></button><span class="toolbar-divider"></span><button class="icon-btn" id="resetView" title="重置视角" aria-label="重置视角"><i data-icon="target"></i></button></div>
       </div>
-      <div class="studio-comparison">
-        <section class="studio-sheet studio-input" aria-label="草图画板">
+      <section class="node-workspace" id="nodeGraph" aria-label="造型节点工作区">
+        <div class="graph-actions" role="toolbar" aria-label="添加节点">
+          <button type="button" id="addSketchNode"><i data-icon="plus"></i>草图节点</button>
+          <button type="button" id="addPreviewNode"><i data-icon="plus"></i>预览节点</button>
+        </div>
+        <span class="graph-count" id="graphCount">节点画布</span>
+        <div class="graph-viewport" id="graphViewport" tabindex="0" aria-label="拖动空白移动画布，滚轮缩放">
+          <div class="graph-world" id="graphWorld">
+            <svg id="graphLinks" class="graph-links" aria-hidden="true"></svg>
+            <div id="graphItems" class="graph-items"></div>
+          </div>
+        </div>
+        <div class="graph-zoom" role="group" aria-label="节点画布视角">
+          <button type="button" id="graphZoomOut" aria-label="缩小节点画布"><i data-icon="minus"></i></button>
+          <button type="button" id="graphFit" title="适应节点画布" aria-label="适应节点画布">100%</button>
+          <button type="button" id="graphZoomIn" aria-label="放大节点画布"><i data-icon="plus"></i></button>
+        </div>
+        <div class="graph-jump"><button type="button" id="graphFocusSketch">定位草图</button><button type="button" id="graphFocusPreview">定位预览</button></div>
+        <p class="graph-hint" id="graphHint" role="status">将草图输出口连到预览输入口</p>
+      </section>
+      <div class="studio-comparison" id="legacyLayout">
+        <section class="studio-sheet studio-input" id="sharedSketch" aria-label="草图画板">
           <header class="studio-sheet-head"><span class="sheet-index">A</span><div><h2>草图</h2><span id="studioDocument">当前草稿</span></div><span class="sheet-state">可编辑</span></header>
       <div class="stage" id="stage">
         <div class="stage-label"><span class="stage-kicker" id="stageKicker">PERSPECTIVE</span><strong id="stageTitle">A01 / 圆角盒体</strong></div>
@@ -76,8 +97,7 @@
       </div>
           <footer class="studio-sheet-foot"><span>画笔 B · 橡皮 E</span><span>空格拖动画布</span></footer>
         </section>
-        <div class="studio-connector" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12h15m-5-5 5 5-5 5"/></svg></div>
-        <section class="studio-sheet studio-output" aria-label="效果画板">
+        <section class="studio-sheet studio-output" id="sharedPreview" aria-label="效果画板">
           <header class="studio-sheet-head"><span class="sheet-index">B</span><div><h2 id="studioOutputTitle">实时预览</h2><span id="studioOutputHint">材质跟随左侧草图</span></div><span class="sheet-state studio-live" id="studioLiveTag"><b></b> 实时</span></header>
           <div class="studio-output-stage" id="studioOutputStage">
             <div id="studioVisual" class="studio-visual" aria-label="当前效果图"></div>
@@ -96,9 +116,10 @@
       <div class="inspector-head"><div class="eyebrow" id="studioInspectorIndex">01 / SKETCH</div><h2 id="inspectorTitle">草图工具</h2></div>
       <section id="panel-derive" class="panel sketch-panel" role="tabpanel" aria-labelledby="tab-derive">
         <section class="studio-controls" aria-label="画笔设置">
-          <div class="studio-control-title"><h3>画笔</h3><kbd>B</kbd></div>
+          <div class="studio-control-title"><h3>画笔</h3><span>触控笔压感 · B</span></div>
           <div id="studioInks" class="studio-inks" role="group" aria-label="笔迹颜色"></div>
           <div class="sketch-slider studio-slider"><div><label for="brushSize">粗细</label><output id="brushSizeValue" for="brushSize">3.5 px</output></div><input type="range" min="1" max="18" step=".5" value="3.5" id="brushSize"></div>
+          <div class="sketch-slider studio-slider"><div><label for="brushOpacity">不透明度</label><output id="brushOpacityValue" for="brushOpacity">100%</output></div><input type="range" min="5" max="100" step="1" value="100" id="brushOpacity"></div>
           <div class="studio-history-actions"><button type="button" id="undoInk"><i data-icon="undo"></i>撤销笔迹</button><button type="button" id="redoInk"><i data-icon="redo"></i>重做</button></div>
         </section>
         <details id="vectorTools" class="vector-tools">
@@ -158,7 +179,7 @@
  </div>
  <div class="control-section ai-prompt-section"><div class="control-heading"><h3><label for="renderPrompt">画面描述</label></h3></div>
   <textarea id="renderPrompt" rows="3" placeholder="描述材质、光照和摄影场景">Industrial product concept, follow the supplied outline, satin brushed aluminum, soft studio light, warm gray backdrop, clean product render</textarea>
-  <div class="prompt-presets" aria-label="渲染预设"><button type="button" data-render-preset="metal">金属棚拍</button><button type="button" data-render-preset="fabric">织物柔光</button><button type="button" data-render-preset="clay">灰模研究</button></div>
+  <div class="prompt-presets" aria-label="渲染预设"><button type="button" data-render-preset="ps">PS 工业设计</button><button type="button" data-render-preset="metal">金属棚拍</button><button type="button" data-render-preset="fabric">织物柔光</button><button type="button" data-render-preset="clay">灰模研究</button></div>
  </div>
  <div class="control-section ai-run"><button type="button" class="btn btn-primary wide" id="generateRender"><i data-icon="spark"></i>生成 AI 效果图</button><button type="button" class="btn btn-ghost wide" id="stopRender" hidden>停止等待</button><p id="comfyStatus" class="constraint-note" role="status">连接 ComfyUI 后可运行草图控形出图。</p></div>
  <details id="comfyConfig" class="control-section comfy-config"><summary>连接 ComfyUI</summary>
@@ -211,6 +232,6 @@
 <div class="toast" id="toast" role="status" hidden></div>
 <dialog class="dialog" id="referenceDialog" aria-labelledby="dialogTitle"><div class="dialog-head"><strong id="dialogTitle">参考素材</strong><button class="icon-btn" id="closeReference" aria-label="关闭"><i data-icon="close"></i></button></div><img id="dialogImage" alt="产品造型参考"><p id="referenceCredit">桌面音箱造型参考 · 概念示意</p></dialog>
 <script src="vendor/paper-core.js"></script><script src="renderer.js"></script>
-<script src="sketch-rules.js"></script><script src="studio-core.js"></script><script src="board.js"></script><script src="comfy.js"></script><script src="app.js"></script><script src="generation.js"></script><script src="sketch-workspace.js"></script><script src="studio.js"></script>
+<script src="sketch-rules.js"></script><script src="studio-core.js"></script><script src="board.js"></script><script src="comfy.js"></script><script src="app.js"></script><script src="node-graph-core.js"></script><script src="node-graph.js"></script><script src="generation.js"></script><script src="sketch-workspace.js"></script><script src="studio.js"></script>
 </body>
 </html>

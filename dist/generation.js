@@ -53,12 +53,19 @@
     clearPreview();
   });
 
+  function linkedId() {
+    if(!workbench.graph?.inBoard())return undefined;
+    const id=workbench.graph.linkedDocumentId();
+    if(!id)throw new Error('请先连入一个草图节点。');
+    return id;
+  }
+
   preview.onclick = async () => {
     const version = sourceVersion;
     preview.disabled = true;
     clearPreview();
     try {
-      const blob = await board.captureControl();
+      const blob = await board.captureControl(linkedId());
       if (version !== sourceVersion) return;
       previewUrl = URL.createObjectURL(blob);
       thumb.src = previewUrl;
@@ -78,6 +85,7 @@
   updateStrength();
 
   const presets = {
+    ps: 'Industrial design line sketch, Photoshop marker rendering, preserve contour and panel seams, layered translucent color blocks, pencil edges, soft cast shadow and rim highlights, ivory presentation paper',
     metal: 'Industrial product photography, satin brushed aluminum, fine dark grille, softbox reflections, warm gray backdrop, soft shadows',
     fabric: 'Industrial product photography, woven fabric grille, matte polymer body, soft diffused daylight, neutral cream backdrop',
     clay: 'Industrial product form study, warm white clay finish, soft gray background, broad overhead light, clean silhouette and soft shadows'
@@ -158,10 +166,12 @@
       message('请填写画面描述。', true);
       return;
     }
+    let source;
+    try { source=board.controlSource(linkedId()); }
+    catch(error){message(error.message,true);return;}
+    const sourceTitle=board.sceneFor(source.id).title;
     const job = new AbortController();
     activeJob = job;
-    const sourceTitle = byId('controlSource').textContent;
-    const source = board.controlSource();
     const settings = {
       endpoint: connectedEndpoint, checkpoint: checkpoint.value, controlnet: controlnet.value,
       strength: Number(strength.value), prompt: description, signal: job.signal,
@@ -172,7 +182,7 @@
     stop.hidden = false;
     message('正在整理选中的控形输入…');
     try {
-      const sketch = await board.captureControl();
+      const sketch = await board.captureControl(source.id);
       if (job.signal.aborted) return;
       const { blob } = await comfy.generate({ ...settings, sketch });
       const image = await dataUrl(blob);
@@ -180,7 +190,7 @@
       const id = board.addImage(image, 'AI 出图 · ' + sourceTitle, source);
       if (!id) throw new Error('已生成效果图，浏览器画布已达容量上限。原图可从 ComfyUI 输出中下载。');
       window.dispatchEvent(new CustomEvent('studiorender',{detail:{id,source}}));
-      message('生成完成，可在右侧画板查看。');
+      message('生成完成，可在关联的预览节点查看。');
     } catch (error) {
       if (!job.signal.aborted) message(error.message || '出图失败，请检查服务状态。', true);
     } finally {

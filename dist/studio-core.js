@@ -52,7 +52,13 @@
       if (!known(inks,stroke?.color) || !Number.isFinite(stroke.size) || stroke.size < .25 || stroke.size > 60 ||
           !Array.isArray(stroke.points) || !stroke.points.length ||
           !stroke.points.slice(0,MAX_POINTS).every(validPoint)) return [];
-      return [{ color:stroke.color, size:n(stroke.size), points:stroke.points.slice(0,MAX_POINTS).map(p=>pt(n(p.x),n(p.y))) }];
+      const points=stroke.points.slice(0,MAX_POINTS).map(p=>{
+        const point=pt(n(p.x),n(p.y));
+        if(Number.isFinite(p.pressure))point.pressure=n(Math.min(1,Math.max(0,p.pressure)));
+        return point;
+      });
+      const opacity=Number.isFinite(stroke.opacity)?n(Math.min(1,Math.max(.05,stroke.opacity))):1;
+      return [{color:stroke.color,size:n(stroke.size),opacity,points}];
     });
   }
 
@@ -65,6 +71,46 @@
       path += ' Q' + pointPair(a) + ' ' + pointPair(pt((a.x+b.x)/2,(a.y+b.y)/2));
     }
     return path + ' L' + pointPair(last);
+  }
+
+  function brushGeometry(stroke) {
+    const points=stroke.points;
+    if(points.length<2||!points.some(p=>Number.isFinite(p.pressure)))return {d:brushPath(stroke),filled:false};
+    const radii=points.map(p=>stroke.size*(.24+.76*(p.pressure??.5))/2);
+    const sides=sign=>points.map((p,i)=>{
+      const a=points[Math.max(0,i-1)], b=points[Math.min(i+1,points.length-1)];
+      const dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy)||1;
+      return pt(p.x-dy*radii[i]*sign/length,p.y+dx*radii[i]*sign/length);
+    });
+    const edge=[...sides(1),...sides(-1).reverse()];
+    const caps=[0,points.length-1].map(i=>{
+      const p=points[i],r=n(radii[i]);
+      return ' M'+n(p.x+r)+' '+n(p.y)+' a'+r+' '+r+' 0 1 1 '+n(-2*r)+' 0 a'+r+' '+r+' 0 1 1 '+n(2*r)+' 0';
+    }).join('');
+    return {d:'M'+edge.map(pointPair).join(' L')+' Z'+caps,filled:true};
+  }
+
+  function enclosedMask(data,width,height){
+    if(width<3||height<3||width*height>400000||data.length!==width*height*4)return null;
+    const flags=new Uint8Array(width*height),queue=new Int32Array(flags.length);
+    let first=0,last=0;
+    for(let i=0;i<flags.length;i++){
+      const p=i*4;
+      if(data[p+3]>100&&data[p]*.299+data[p+1]*.587+data[p+2]*.114<165)flags[i]=1;
+    }
+    const push=i=>{if(!flags[i]){flags[i]=2;queue[last++]=i;}};
+    for(let x=0;x<width;x++){push(x);push((height-1)*width+x);}
+    for(let y=1;y<height-1;y++){push(y*width);push(y*width+width-1);}
+    while(first<last){
+      const i=queue[first++], x=i%width;
+      if(x>0)push(i-1);
+      if(x<width-1)push(i+1);
+      if(i>=width)push(i-width);
+      if(i+width<flags.length)push(i+width);
+    }
+    let filled=0;
+    const mask=flags.map(value=>{if(value===0){filled++;return 255;}return 0;});
+    return filled>=Math.max(9,flags.length*.003)?mask:null;
   }
 
   function pointDistance(p, a, b) {
@@ -111,7 +157,7 @@
   function sceneBounds(scene, rules) {
     const outline=scene.curve?.nodes?.length ? rules.controlBounds(scene.curve) : null;
     const ink=bounds(scene.ink.flatMap(stroke=>stroke.points));
-    const boxes=[outline,ink].filter(Boolean);
+    const boxes=[outline,ink,scene.underlay].filter(Boolean);
     if (!boxes.length) return {x:150,y:140,width:385,height:190};
     const x=Math.min(...boxes.map(b=>b.x)), y=Math.min(...boxes.map(b=>b.y));
     return {x,y,width:Math.max(...boxes.map(b=>b.x+b.width))-x,height:Math.max(...boxes.map(b=>b.y+b.height))-y};
@@ -136,9 +182,33 @@
   }
 
   function inkMarkup(strokes, monochrome=false) {
-    return strokes.map(stroke=>'<path class="studio-ink-line" d="'+brushPath(stroke)+'" fill="none" stroke="'+
-      (monochrome?'#15151a':inks[stroke.color].color)+'" stroke-width="'+stroke.size+
-      '" stroke-linejoin="round" stroke-linecap="round"/>').join('');
+    return strokes.map(stroke=>{
+      const {d,filled}=brushGeometry(stroke), color=monochrome?'#15151a':inks[stroke.color].color;
+      const style=filled?' fill="'+color+'"':' fill="none" stroke="'+color+'" stroke-width="'+stroke.size+'"';
+      return '<path class="studio-ink-line" d="'+d+'"'+style+' opacity="'+(monochrome?1:stroke.opacity??1)+
+        '" stroke-linejoin="round" stroke-linecap="round"/>';
+    }).join('');
+  }
+
+  function underlayMarkup(underlay,{mask=false,opacity=.80,blend=false}={}){
+    if(!underlay)return '';
+    const src=mask?underlay.mask:underlay.src;
+    if(typeof src!=='string'||!/^data:image\/(?:jpeg|png);base64,[a-zA-Z0-9+/=]+$/.test(src)||
+      ![underlay.x,underlay.y,underlay.width,underlay.height].every(Number.isFinite))return '';
+    return '<image href="'+src+'" x="'+underlay.x+'" y="'+underlay.y+'" width="'+underlay.width+'" height="'+underlay.height+
+      '" opacity="'+opacity+'" preserveAspectRatio="none"'+(blend?' style="mix-blend-mode:multiply"':'')+'/>';
+  }
+
+  function rasterTint(underlay,id,tone,angle){
+    if(!underlay)return '';
+    const mask=underlayMarkup(underlay,{mask:true,opacity:1});
+    if(!mask)return underlayMarkup(underlay,{blend:true});
+    const rect=' x="'+underlay.x+'" y="'+underlay.y+'" width="'+underlay.width+'" height="'+underlay.height+'"';
+    return '<defs><mask id="'+id+'-inkmask" maskUnits="userSpaceOnUse" style="mask-type:alpha"'+rect+'>'+mask+'</mask>'+
+      '<linearGradient id="'+id+'-wash" x1="'+angle+'%" y1="0%" x2="75%" y2="100%"><stop stop-color="'+tone.bright+'"/>'+
+      '<stop offset=".58" stop-color="'+tone.mid+'"/><stop offset="1" stop-color="'+tone.shade+'"/></linearGradient></defs>'+
+      '<rect class="studio-ps-raster"'+rect+' fill="url(#'+id+'-wash)" mask="url(#'+id+'-inkmask)" opacity=".91"/>'+
+      underlayMarkup(underlay,{blend:true});
   }
 
   function lineMarkup(scene,rules,{id='lines',monochrome=false}={}) {
@@ -146,7 +216,7 @@
     const clip=id+'-pattern';
     const detail=curve&&scene.profile==='shoe'
       ? '<defs><clipPath id="'+clip+'"><path d="'+curve+'"/></clipPath></defs>'+shoeSketchMarkup(clip,scene.offset) : '';
-    return '<g color="'+(monochrome?'#15151a':'#35313b')+'">'+
+    return '<g color="'+(monochrome?'#15151a':'#35313b')+'">'+underlayMarkup(scene.underlay,{opacity:monochrome?1:.82})+
       (curve?'<path d="'+curve+'" stroke="currentColor" stroke-width="2.1" fill="none"/>'+detail:'')+
       inkMarkup(scene.ink,monochrome)+'</g>';
   }
@@ -173,6 +243,7 @@
     const id=/^[a-z][a-z0-9-]*$/.test(options.id||'')?options.id:'studio';
     const tone=known(tones,options.tone)?tones[options.tone]:tones.silver;
     const angle=Math.min(100,Math.max(0,Number(options.light??38)||0));
+    const ps=options.style==='ps';
     const form=scene.curve?.closed ? scene.curve : scene.curve?.nodes?.length ? null : (Object.hasOwn(scene,'form')?scene.form:inkOutline(scene.ink,rules));
     const [x,y,w,h]=frameFor(scene,rules,options.ratio||1.24);
     const box=form ? sceneBounds({curve:form,ink:[]},rules) : null;
@@ -183,9 +254,13 @@
     const title='<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="'+Math.round(1100*h/w)+'" viewBox="'+[x,y,w,h].join(' ')+'" preserveAspectRatio="xMidYMid slice" role="img" aria-label="材质效果预览">';
     const background='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" fill="'+url('paper')+'"/>';
     const paper='<radialGradient id="'+ref('paper')+'" cx="'+(27+angle*.28)+'%" cy="25%" r="84%"><stop stop-color="#fbfaf4"/><stop offset="1" stop-color="#dfdfda"/></radialGradient>';
-    if (!form) return title+'<defs>'+paper+'</defs>'+background+
-      (stroke?'<path d="'+stroke+'" fill="none" stroke="#40414a" stroke-width="2.1"/>':'')+
-      inkMarkup(scene.ink)+'</svg>';
+    if (!form) {
+      const wash=ps?'<g class="studio-ps-wash" opacity=".30" transform="translate(1 2.5)">'+
+        inkMarkup(scene.ink.map(line=>({...line,size:line.size*2.7})))+'</g>':'';
+      return title+'<defs>'+paper+'</defs>'+background+rasterTint(scene.underlay,id,tone,angle)+wash+
+        (stroke?'<path d="'+stroke+'" fill="none" stroke="#40414a" stroke-width="2.1"/>':'')+
+        inkMarkup(scene.ink)+'</svg>';
+    }
     const grad=(name,stops)=>'<linearGradient id="'+ref(name)+'" x1="'+(angle-15)+'%" y1="0%" x2="'+(80-angle*.55)+'%" y2="100%">'+
       stops.map(([offset,color])=>'<stop offset="'+offset+'" stop-color="'+color+'"/>').join('')+'</linearGradient>';
     const shadowY=box.y+box.height+box.width*.023, center=box.x+box.width*.5;
@@ -197,6 +272,13 @@
       '<pattern id="'+ref('weave')+'" patternUnits="userSpaceOnUse" width="3.2" height="3"><path d="M.25 2L1.55 .65 M1.9 2.8L2.8 1.9" stroke="#fff6e7" stroke-opacity=".47" stroke-width=".6"/><path d="M.4 2.5L1.6 1.3" stroke="#302a28" stroke-opacity=".21" stroke-width=".51"/></pattern>'+
       '<filter id="'+ref('blur')+'" x="-50%" y="-250%" width="200%" height="600%"><feGaussianBlur stdDeviation="'+n(box.width*.024)+'"/></filter>'+
       '<clipPath id="'+ref('clip')+'"><path d="'+shape+'"/></clipPath></defs>';
+    const lighting=ps?'<g class="studio-ps-light" clip-path="'+url('clip')+'">'+
+      '<path d="M '+n(box.x)+' '+n(box.y+box.height*.28)+' L '+n(box.x+box.width)+' '+n(box.y+box.height*.09)+
+      ' v '+n(box.height*.14)+' l '+n(-box.width)+' '+n(box.height*.20)+' Z" fill="#fcf2d7" opacity=".19"/>'+
+      '<path d="M '+n(box.x)+' '+n(box.y+box.height*.81)+' Q '+n(center)+' '+n(box.y+box.height*.63)+' '+n(box.x+box.width)+' '+n(box.y+box.height*.74)+
+      ' v '+n(box.height*.30)+' H '+n(box.x)+' Z" fill="'+tone.shade+'" opacity=".20"/></g>':'';
+    const linework=ps?'<path class="studio-ps-outline" d="'+shape+'" fill="none" stroke="#373039" stroke-opacity=".87" stroke-width="1.8"/>'+
+      (scene.profile==='shoe'?'<g color="#453b3d" opacity=".66">'+shoeSketchMarkup(ref('clip'),scene.offset)+'</g>':''):'';
     return title+defs+background+'<g class="studio-object">'+
       '<ellipse cx="'+n(center+(angle-50)*.26)+'" cy="'+n(shadowY)+'" rx="'+n(box.width*.47)+'" ry="'+n(box.width*.045)+'" fill="#252327" opacity=".29" filter="'+url('blur')+'"/>'+
       '<ellipse cx="'+n(center)+'" cy="'+n(shadowY-box.width*.02)+'" rx="'+n(box.width*.36)+'" ry="'+n(box.width*.013)+'" fill="#423c37" opacity=".16"/>'+
@@ -204,9 +286,10 @@
       '<path d="'+shape+'" fill="'+url('body')+'" stroke="'+tone.shade+'" stroke-width="1"/>'+
       (scene.profile==='shoe'?shoeFinish(id,tone,scene.offset):'')+
       '<path d="'+shape+'" fill="'+url('sheen')+'" stroke="#fffaec" stroke-opacity=".42" stroke-width="1.15"/>'+
-      '<g opacity=".83">'+inkMarkup(scene.ink)+'</g></g></svg>';
+      lighting+linework+underlayMarkup(scene.underlay,{opacity:.56,blend:true})+
+      '<g opacity=".94">'+inkMarkup(scene.ink)+'</g></g></svg>';
   }
 
-  return { MAX_STROKES,MAX_POINTS,inks,tones,shoeSample,cleanInk,brushPath,hitStroke,inkOutline,
+  return { MAX_STROKES,MAX_POINTS,inks,tones,shoeSample,cleanInk,brushPath,brushGeometry,enclosedMask,underlayMarkup,hitStroke,inkOutline,
     frameFor,inkMarkup,shoeSketchMarkup,lineMarkup,renderSvg };
 });

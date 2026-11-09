@@ -156,7 +156,7 @@
       $('sheetTag').textContent = closed ? '矢量草稿' : curve.blank ? '自由画板' : '开放曲线';
     }
     if (isBoard) {
-      $('linkState').textContent = handMode ? '手绘改线 · 笔迹转成曲线' : '左右画板同步';
+      $('linkState').textContent = handMode ? '手绘改线 · 笔迹转成曲线' : '节点连线 · 实时预览';
       $('dimensionReadout').textContent = curve ? curveStatus : '';
     }
     $('ruleMode').setAttribute('aria-pressed', String(!handMode));
@@ -165,7 +165,7 @@
     $('ruleOptions').hidden = handMode;
     $('handOptions').hidden = !handMode;
     $('generateSketch').disabled = !closed;
-    $('renderFromSketch').disabled = !curve || !(curve.nodes.length || curve.ink?.length);
+    $('renderFromSketch').disabled = !curve || !(curve.nodes.length || curve.ink?.length || curve.underlay);
     if (handMode) {
       $('handTarget').textContent = closed
         ? '重画 ' + label(anchor) + ' → ' + label((anchor + 1) % curve.nodes.length)

@@ -63,7 +63,7 @@ function transformPixels(ctx,width,height,edges){
  }
  ctx.putImageData(frame,0,0);
 }
-function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},onScene=()=>{},toolSlot,demo=false}={}){
+function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},onScene=()=>{},toolSlot,isolated=false,demo=false}={}){
  const storageKey=STORE+(demo?'-demo':'');
  root.classList.add('wb-board');
  root.setAttribute('tabindex','0');
@@ -77,9 +77,9 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  const toolbar=root.querySelector('.wb-toolbar');
  if(toolSlot)toolSlot.append(toolbar);
  let items=[], selectedId=null, anchorIndex=0, draft=null, tool='brush', drag=null, space=false;
- const inkUndo=new Map(), inkRedo=new Map();
- const brush={color:'graphite',size:3.5};
- let showInk=true,showContour=true;
+ const inkUndo=new Map(), inkRedo=new Map(), underlayImports=new WeakMap();
+ const brush={color:'graphite',size:3.5,opacity:1};
+ const visibility=it=>({showInk:it?.hideInk!==true,showContour:it?.hideContour!==true,showUnderlay:it?.hideUnderlay!==true});
  let x=0,y=0,z=1,ready=false,saveTimer,pendingFocus=null,autoFit=true;
  let preview=null, handDraft=null;
  const activeVersions=new Map();
@@ -135,7 +135,7 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    let label='拖动空白处平移 · 滚轮缩放';
    if(it?.type==='curve')label='拖动锚点或手柄 · 滚轮缩放';
    else if(it)label='选中 '+it.title+' · 可作出图输入';
-   if(tool==='brush')label='按住自由画线 · 右侧同步预览';
+   if(tool==='brush')label='按住自由画线 · 预览随连线更新';
    if(tool==='erase')label='划过要擦除的笔迹 · Ctrl+Z 撤销';
    if(tool==='pen')label=draft?'拖动落点画出切线，点击起点闭合':'点击落点，拖动生成切线';
    if(tool==='pan')label='拖动平移 · 滚轮缩放';
@@ -185,9 +185,15 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  function drawCurves(){
    layer.replaceChildren();drawLinks();
    for(const it of items){
-     if(it.type!=='curve')continue;
+     if(it.type!=='curve'||(isolated&&it.id!==selectedId))continue;
+     const {showInk,showContour,showUnderlay}=visibility(it);
      const active=activeVersions.get(familyOf(it));
      if(active&&it.id!==active)continue;
+     if(showUnderlay&&it.underlay){
+       const underlay=svgEl('g',{class:'wb-underlay','aria-hidden':'true'});
+       underlay.innerHTML=studio.underlayMarkup(it.underlay,{opacity:.67});
+       layer.append(underlay);
+     }
      const d=curveData(it);
      const selected=it.id===selectedId;
      const replacement=selected?(handDraft?.candidate||preview):null;
@@ -240,9 +246,9 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
        }
      });
    }
-   if(showInk&&drag?.type==='brush'){
+   if(drag?.type==='brush'&&visibility(drag.item).showInk){
      layer.append(drag.element);
-     drag.element.setAttribute('d',studio.brushPath(drag.stroke));
+     updateInkElement(drag.stroke,drag.element);
    }
    onScene();
  }
@@ -291,8 +297,14 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    const next=limit(Math.round((z+delta)*1000)/1000,.20,2.8);
    const ratio=next/z;x=px-(px-x)*ratio;y=py-(py-y)*ratio;z=next;transform();
  }
+ function viewportPoint(event){
+   const box=viewport.getBoundingClientRect();
+   const scaleX=box.width/viewport.clientWidth||1,scaleY=box.height/viewport.clientHeight||1;
+   return {x:(event.clientX-box.left)/scaleX,y:(event.clientY-box.top)/scaleY};
+ }
  function position(event){
-   const box=viewport.getBoundingClientRect();return {x:(event.clientX-box.left-x)/z,y:(event.clientY-box.top-y)/z};
+   const point=viewportPoint(event);
+   return {x:(point.x-x)/z,y:(point.y-y)/z};
  }
  function chooseTool(next){
    if(next!=='pen'&&draft)finish(false);
@@ -457,7 +469,8 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    const number=Math.max(0,...items.filter(it=>familyOf(it)===familyId).map(it=>it.versionNo||0))+1;
    const item={id:uid(),type:'curve',title:'修改稿 '+String(number).padStart(2,'0'),familyId,
      parentId:source.id,versionNo:number,kind,closed:true,nodes:structuredClone(candidate.nodes),pins:rules.pinSpec(candidate),
-     profile:source.profile,detailOffsetX:source.detailOffsetX,ink:structuredClone(source.ink||[])};
+     profile:source.profile,detailOffsetX:source.detailOffsetX,ink:structuredClone(source.ink||[]),
+     underlay:source.underlay,hideUnderlay:source.hideUnderlay};
    const index=anchorIndex;
    items.push(item);
    handDraft=null;preview=null;
@@ -491,20 +504,23 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    layer.append(path);
    drag={type:'redraw',curve,index:anchorIndex,points:[point],path,distance,key:rules.sketchKey(curve)};
  }
- function sceneState({drafts=true}={}){
-   const it=selection(), curve=selectedCurve();
-   const ink=showInk?[...(curve?.ink||[]),...(drafts&&drag?.type==='brush'?[drag.stroke]:[])]:[];
+ function sceneFor(id,{drafts=true}={}){
+   const it=items.find(item=>item.id===id),curve=it?.type==='curve'?it:null;
+   const {showInk,showContour,showUnderlay}=visibility(it);
+   const editing=drafts&&id===selectedId;
+   const ink=showInk?[...(curve?.ink||[]),...(editing&&drag?.type==='brush'?[drag.stroke]:[])]:[];
    return {
      id:it?.id??null,title:it?.title??'未选择草稿',tool,ink,profile:curve?.profile,offset:curve?.detailOffsetX,
-     curve:showContour&&curve?.nodes.length?(drafts?(handDraft?.candidate||preview||curve):curve):null,
+     curve:showContour&&curve?.nodes.length?(editing?(handDraft?.candidate||preview||curve):curve):null,
      frame:curve?.blankFrame,reference:!curve?it?.src:null,
-     showInk,showContour,hasCurve:!!curve?.nodes.length,drawing:drag?.type==='brush'||drag?.type==='erase'||drag?.type==='handle',
+     underlay:showUnderlay?curve?.underlay:null,showInk,showContour,showUnderlay,hasUnderlay:!!curve?.underlay,hasCurve:!!curve?.nodes.length,drawing:editing&&['brush','erase','handle'].includes(drag?.type),
      canUndo:!!inkUndo.get(it?.id)?.length,canRedo:!!inkRedo.get(it?.id)?.length
    };
  }
- function controlSource(){
-   const scene=sceneState({drafts:false});
-   const input=JSON.stringify([scene.reference,scene.profile,scene.curve?curveData(scene.curve):'',scene.ink]);
+ function sceneState(options){return sceneFor(selectedId,options);}
+ function controlSource(id=selectedId){
+   const scene=sceneFor(id,{drafts:false});
+   const input=JSON.stringify([scene.reference,scene.underlay?.src,scene.profile,scene.curve?curveData(scene.curve):'',scene.ink]);
    let stamp=2166136261;
    for(let i=0;i<input.length;i++)stamp=Math.imul(stamp^input.charCodeAt(i),16777619);
    return {id:scene.id,stamp:stamp>>>0};
@@ -515,8 +531,8 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  function addBlank(useViewport=false){
    if(draft)finish(false);
    if(items.length>=MAX_ITEMS){onToast('画布对象已达上限');return null;}
-   const center=position({clientX:viewport.getBoundingClientRect().left+viewport.clientWidth/2,
-     clientY:viewport.getBoundingClientRect().top+viewport.clientHeight/2});
+   const box=viewport.getBoundingClientRect();
+   const center=position({clientX:box.left+box.width/2,clientY:box.top+box.height/2});
    const edges=items.filter(it=>it.type==='curve').map(it=>it.blankFrame?it.blankFrame[0]+it.blankFrame[2]:
      it.nodes.length?rules.controlBounds(it).x+rules.controlBounds(it).width:0);
    const left=useViewport?center.x-250:Math.max(80,...edges)+100;
@@ -546,30 +562,89 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  function setBrush(next){
    if(Object.hasOwn(studio.inks,next.color))brush.color=next.color;
    if(Number.isFinite(next.size))brush.size=limit(next.size,1,18);
+   if(Number.isFinite(next.opacity))brush.opacity=limit(next.opacity,.05,1);
  }
  function setLayer(name,shown){
-   if(name==='ink')showInk=shown;
-   if(name==='contour')showContour=shown;
-   drawCurves();notifySelection();
+   const it=selectedCurve();
+   if(!it)return;
+   if(name==='ink')it.hideInk=!shown;
+   if(name==='contour')it.hideContour=!shown;
+   if(name==='underlay')it.hideUnderlay=!shown;
+   drawCurves();notifySelection();save();
  }
- function beginPaint(point){
+ function paintPoint(point,event,previous){
+   const value=copy(point);
+   if(event.pointerType==='pen')value.pressure=event.pressure>0?event.pressure:previous?.pressure??.25;
+   return value;
+ }
+ function updateInkElement(stroke,element){
+   const {d,filled}=studio.brushGeometry(stroke);
+   const color=studio.inks[stroke.color].color;
+   element.setAttribute('d',d);
+   element.setAttribute('opacity',stroke.opacity);
+   element.setAttribute('fill',filled?color:'none');
+   element.setAttribute('stroke',filled?'none':color);
+ }
+ async function importUnderlay(file,id=selectedId){
+   const it=items.find(item=>item.id===id&&item.type==='curve');
+   if(!it||!file)return false;
+   if(!/^image\/(?:png|jpeg|webp)$/.test(file.type)||file.size>15*1024*1024){
+     onToast('请选择 15 MB 以内的 PNG、JPEG 或 WebP 草图');return false;
+   }
+   const token={};
+   underlayImports.set(it,token);
+   const objectUrl=URL.createObjectURL(file);
+   try{
+     const src=await persistableImage(objectUrl);
+     const img=await imageFrom(src);
+     const ratio=Math.min(1,420/Math.max(img.naturalWidth,img.naturalHeight));
+     const canvas=document.createElement('canvas');
+     canvas.width=Math.max(1,Math.round(img.naturalWidth*ratio));
+     canvas.height=Math.max(1,Math.round(img.naturalHeight*ratio));
+     const ctx=canvas.getContext('2d',{willReadFrequently:true});
+     ctx.drawImage(img,0,0,canvas.width,canvas.height);
+     const image=ctx.getImageData(0,0,canvas.width,canvas.height);
+     const fill=studio.enclosedMask(image.data,canvas.width,canvas.height);
+     let mask;
+     if(fill){
+       for(let i=0;i<fill.length;i++)image.data.set([255,255,255,fill[i]],i*4);
+       ctx.putImageData(image,0,0);mask=canvas.toDataURL('image/png');
+     }
+     if(!items.includes(it)||underlayImports.get(it)!==token)return false;
+     const [x,y,w,h]=it.blankFrame||studio.frameFor({curve:it,ink:it.ink||[]},rules);
+     const scale=Math.min(w*.85/img.naturalWidth,h*.82/img.naturalHeight);
+     const width=img.naturalWidth*scale,height=img.naturalHeight*scale;
+     it.underlay={src,mask,x:x+(w-width)/2,y:y+(h-height)/2,width,height};
+     it.hideUnderlay=false;
+     drawCurves();notifySelection();
+     onToast(flushSave()?'已导入线稿底图，可直接在上面画':'已载入底图，浏览器存储空间不足');
+     return true;
+   }catch{
+     if(underlayImports.get(it)===token)onToast('无法读取这张线稿图片');
+     return false;
+   }finally{
+     if(underlayImports.get(it)===token)underlayImports.delete(it);
+     URL.revokeObjectURL(objectUrl);
+   }
+ }
+ function beginPaint(point,event){
    const it=selectedCurve()||addBlank(true);
    if(!it)return;
-   if(!showInk)showInk=true;
+   it.hideInk=false;
    const before=it.ink||[];
    if(before.length>=studio.MAX_STROKES){onToast('这张草稿的笔迹已满，可用橡皮擦出空间。');return;}
-   const stroke={color:brush.color,size:limit(brush.size/z,.25,60),points:[copy(point)]};
+   const stroke={color:brush.color,size:limit(brush.size/z,.25,60),opacity:brush.opacity,points:[paintPoint(point,event)]};
    const element=svgEl('path',{class:'studio-ink-line',fill:'none',stroke:studio.inks[stroke.color].color,'stroke-width':stroke.size,
      'stroke-linecap':'round','stroke-linejoin':'round'});
    drag={type:'brush',item:it,before,stroke,element};
    drawCurves();
  }
- function extendPaint(point){
+ function extendPaint(point,event){
    const {stroke,element}=drag;
    if(Math.hypot(point.x-stroke.points.at(-1).x,point.y-stroke.points.at(-1).y)<1.3/z)return;
    if(stroke.points.length>=studio.MAX_POINTS)stroke.points=stroke.points.filter((_,i)=>i%2===0);
-   stroke.points.push(copy(point));
-   element.setAttribute('d',studio.brushPath(stroke));
+   stroke.points.push(paintPoint(point,event,stroke.points.at(-1)));
+   updateInkElement(stroke,element);
    onScene();
  }
  function eraseAt(point){
@@ -580,7 +655,9 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    drawCurves();
  }
  function artSvg(it,monochrome=false){
-   const scene={curve:showContour?it:null,ink:showInk?it.ink||[]:[],profile:it.profile,offset:it.detailOffsetX,frame:it.blankFrame};
+   const {showInk,showContour,showUnderlay}=visibility(it);
+   const scene={curve:showContour?it:null,ink:showInk?it.ink||[]:[],profile:it.profile,offset:it.detailOffsetX,
+     frame:it.blankFrame,underlay:showUnderlay?it.underlay:null};
    const frame=studio.frameFor(scene,rules,1.25);
    return '<svg xmlns="'+ns+'" width="800" height="640" viewBox="'+frame.join(' ')+'">'+
      studio.lineMarkup(scene,rules,{id:'export',monochrome})+'</svg>';
@@ -599,18 +676,20 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    catch{onToast('无法打开这张图片');}finally{URL.revokeObjectURL(url);}
  });
  viewport.addEventListener('wheel',event=>{
-   event.preventDefault();const box=viewport.getBoundingClientRect();
-   zoom(-Math.sign(event.deltaY)*Math.min(.16,Math.max(.03,Math.abs(event.deltaY)*.001)),event.clientX-box.left,event.clientY-box.top);
+   event.preventDefault();
+   const point=viewportPoint(event);
+   zoom(-Math.sign(event.deltaY)*Math.min(.16,Math.max(.03,Math.abs(event.deltaY)*.001)),point.x,point.y);
  },{passive:false});
  viewport.addEventListener('pointerdown',event=>{
    if(drag||event.isPrimary===false||(event.button!==0&&event.button!==1))return;
    event.preventDefault();root.focus({preventScroll:true});
    const target=event.target.closest('[data-board-item]'),point=position(event);
-   if(tool==='pan'||space||event.button===1){drag={type:'pan',cx:event.clientX,cy:event.clientY,x,y};}
-   else if(tool==='brush')beginPaint(point);
+   const pan=()=>({type:'pan',origin:viewportPoint(event),x,y});
+   if(tool==='pan'||space||event.button===1){drag=pan();}
+   else if(tool==='brush')beginPaint(point,event);
    else if(tool==='erase'){
      const item=selectedCurve();
-     if(item?.ink?.length&&showInk){drag={type:'erase',item,before:item.ink,previous:point};eraseAt(point);}
+     if(item?.ink?.length&&visibility(item).showInk){drag={type:'erase',item,before:item.ink,previous:point};eraseAt(point);}
    }
    else if(tool==='redraw')beginInk(event,selectedCurve(),target,point);
    else if(tool==='pen'){
@@ -624,14 +703,17 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
        const key=target.dataset.boardHandle;
        drag={type:'handle',item:it,node:it.nodes[index],key,start:point,original:copy(it.nodes[index][key])};
      }
-   }else{select(null);drag={type:'pan',cx:event.clientX,cy:event.clientY,x,y};}
+   }else{if(!isolated)select(null);drag=pan();}
    if(drag){viewport.setPointerCapture(event.pointerId);root.classList.add('is-dragging');}
  });
  viewport.addEventListener('pointermove',event=>{
    if(!drag)return;
-   if(drag.type==='pan'){autoFit=false;x=drag.x+event.clientX-drag.cx;y=drag.y+event.clientY-drag.cy;transform();return;}
+   if(drag.type==='pan'){
+     const point=viewportPoint(event);autoFit=false;
+     x=drag.x+point.x-drag.origin.x;y=drag.y+point.y-drag.origin.y;transform();return;
+   }
    const p=position(event);
-   if(drag.type==='brush'){extendPaint(p);return;}
+   if(drag.type==='brush'){extendPaint(p,event);return;}
    if(drag.type==='erase'){eraseAt(p);return;}
    if(drag.type==='redraw'){
      const last=drag.points.at(-1);
@@ -657,7 +739,7 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  for(const type of ['pointerup','pointercancel','lostpointercapture'])viewport.addEventListener(type,event=>{
    if(!drag)return;
    const done=drag;
-   if(event.type==='pointerup'&&done.type==='brush')extendPaint(position(event));
+   if(event.type==='pointerup'&&done.type==='brush')extendPaint(position(event),event);
    if(event.type==='pointerup'&&done.type==='erase')eraseAt(position(event));
    drag=null;root.classList.remove('is-dragging');
    if(done.type==='brush'||done.type==='erase'){
@@ -699,7 +781,7 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
      if(draft)finish(false);
      else if(handDraft)clearHand();
      else if(tool==='redraw')chooseTool('select');
-     else select(null);
+     else if(!isolated)select(null);
    }
    if(event.key==='Delete'||event.key==='Backspace'){remove();event.preventDefault();}
    if(event.key.startsWith('Arrow')&&selection()&&selection().type!=='curve'){
@@ -713,11 +795,13 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  });
  root.addEventListener('keyup',event=>{if(event.key===' '){space=false;root.classList.remove('wb-space');}});
  root.addEventListener('focusout',event=>{if(!root.contains(event.relatedTarget)){space=false;root.classList.remove('wb-space');}});
- async function captureControl(){
-   const it=selection();const canvas=document.createElement('canvas');canvas.width=800;canvas.height=640;
+ async function captureControl(id=selectedId){
+   const it=items.find(item=>item.id===id);
+   const {showInk,showContour,showUnderlay}=visibility(it);
+   const canvas=document.createElement('canvas');canvas.width=800;canvas.height=640;
    const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,0,800,640);
    if(it?.type==='curve'){
-     if(!(showContour&&it.nodes.length>=2)&&!(showInk&&it.ink?.length))throw new Error('请先绘制可用于控形的线条');
+     if(!(showContour&&it.nodes.length>=2)&&!(showInk&&it.ink?.length)&&!(showUnderlay&&it.underlay))throw new Error('请先绘制或导入可用于控形的线稿');
      const img=await imageFrom(svgUri(artSvg(it,true)));
      fitImage(ctx,img,800,640,18);
    }else{
@@ -729,7 +813,7 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
  async function exportSelected(){
    const it=selection();
    if(it?.type==='curve'){
-     if(!it.nodes.length&&!it.ink?.length)throw new Error('请先画几笔再导出');
+     if(!it.nodes.length&&!it.ink?.length&&!it.underlay)throw new Error('请先画几笔再导出');
      return new Blob([artSvg(it)],{type:'image/svg+xml;charset=utf-8'});
    }
    if(!it)return captureControl();
@@ -743,7 +827,7 @@ function mount(root,{getSketch,onToast=()=>{},onSelection=()=>{},onZoom=()=>{},o
    hide(){if(draft)finish(false);root.hidden=true;},
    addImage,addCurrentSketch,captureControl,exportSelected,resetView,zoom,zoomReset:resetView,getZoom:()=>z,
    sketchState,openCurve,addBase,addBlank,pickAnchor,togglePin,setPreview,saveVersion,clearHand,acceptHand,setTool:chooseTool,
-   sceneState,controlSource,resultsFor,stepInk,setBrush,setLayer
+   sceneState,sceneFor,controlSource,resultsFor,stepInk,setBrush,setLayer,importUnderlay
  };
 }
 window.WuyingBoard={mount};

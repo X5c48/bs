@@ -383,14 +383,15 @@ const currentControlSvg = () => {
 };
 let boardSelection=null;
 const board = window.WuyingBoard?.mount($('#freeBoard'),{
-  getSketch:currentControlSvg,onToast:toast,demo,toolSlot:$('#boardToolSlot'),
+  getSketch:currentControlSvg,onToast:toast,demo,isolated:true,toolSlot:$('#boardToolSlot'),
   onScene(){window.dispatchEvent(new Event('boardscenechange'));},
   onZoom(scale){$('#zoomReset').textContent=Math.round(scale*100)+'%';},
   onSelection(selection){
     boardSelection=selection;
-    $('#controlSource').textContent=selection?.title || '当前方案草图';
+    if(!window.WuyingWorkbench?.graph)$('#controlSource').textContent=selection?.title || '当前方案草图';
     updateExportLabel();
-    window.dispatchEvent(new Event('controlsourcechange'));
+    const graph=window.WuyingWorkbench?.graph;
+    if(!graph||graph.linkedDocumentId()===board.sceneState().id)window.dispatchEvent(new Event('controlsourcechange'));
     window.dispatchEvent(new Event('sketchstatechange'));
   }
 });

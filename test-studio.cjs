@@ -32,6 +32,41 @@ test('an open stroke stays line art, a simple closed stroke provides a filled fo
   assert.ok(studio.inkOutline([closed], rules)?.closed);
 });
 
+test('brush opacity survives save and pen pressure changes the shape of the ink', () => {
+  const pressureStroke={...line([[0,10],[22,11],[44,10]],10),opacity:.42};
+  pressureStroke.points[0].pressure=.12;
+  pressureStroke.points[1].pressure=.86;
+  const [saved]=studio.cleanInk([pressureStroke]);
+  assert.equal(saved.opacity,.42);
+  assert.equal(saved.points[0].pressure,.12);
+  assert.equal(studio.brushGeometry(saved).filled,true);
+  assert.notEqual(studio.brushGeometry(saved).d,studio.brushPath(saved));
+  assert.match(studio.inkMarkup([saved]),/opacity="0.42"/);
+});
+
+test('the raster color mask fills an enclosed line drawing without spilling into the paper', () => {
+  const size=24, image=new Uint8ClampedArray(size*size*4).fill(255);
+  for(let y=5;y<=17;y++)for(let x=5;x<=17;x++){
+    if(x!==5&&x!==17&&y!==5&&y!==17)continue;
+    image.fill(20,(y*size+x)*4,(y*size+x)*4+3);
+  }
+  const mask=studio.enclosedMask(image,size,size);
+  assert.equal(mask[10*size+10],255);
+  assert.equal(mask[1],0);
+  image.fill(255,(5*size+10)*4,(5*size+10)*4+3);
+  assert.equal(studio.enclosedMask(image,size,size),null);
+});
+
+test('the Photoshop-style preview keeps the design outline and adds a marker wash to open strokes', () => {
+  const shoe=studio.shoeSample();
+  const closed=studio.renderSvg({curve:shoe,ink:[],profile:'shoe'},rules,{id:'psclosed',style:'ps'});
+  assert.match(closed,/class="studio-ps-outline"/);
+  assert.match(closed,/class="studio-ps-light"/);
+  const open=studio.renderSvg({ink:[line([[18,25],[88,53]])]},rules,{id:'psopen',style:'ps'});
+  assert.match(open,/class="studio-ps-wash"/);
+  assert.match(open,/class="studio-ink-line"/);
+});
+
 test('the showcase geometry passes the same curve checks and real paint is included in both exports', () => {
   const shoe = studio.shoeSample();
   assert.equal(rules.inspect(shoe).ok, true);

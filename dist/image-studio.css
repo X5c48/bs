@@ -187,6 +187,7 @@ textarea::placeholder, input::placeholder { color: #888795; }
 .live-bar .segmented { display: flex; gap: 2px; }
 .live-bar .segmented .button[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
 .live-range { display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.live-range.is-disabled { opacity: .45; }
 .live-range input { width: 74px; }
 .live-range output { min-width: 28px; font-variant-numeric: tabular-nums; }
 .live-range select { max-width: 140px; background: var(--field); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; font-size: 11px; padding: 2px 4px; }

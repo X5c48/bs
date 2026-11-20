@@ -57,6 +57,13 @@
         </label>
       </div>
       <p class="files-feedback" id="file-feedback" role="status" aria-live="polite" hidden></p>
+      <div class="selection-bar" id="selection-bar" hidden>
+        <span id="selection-count" role="status">已选 0 个文件</span>
+        <div class="selection-actions">
+          <button class="button button-secondary" id="clear-selection" type="button">取消选择</button>
+          <button class="button button-danger" id="delete-selected" type="button">删除所选</button>
+        </div>
+      </div>
       <ul class="file-grid" id="file-grid" aria-label="文件" hidden></ul>
       <section class="files-empty" id="files-empty" hidden>
         <span class="empty-document" aria-hidden="true"></span>
@@ -77,6 +84,17 @@
         <button class="button button-secondary" id="export-file" type="button" hidden>下载备份</button>
         <button class="button button-secondary" id="cancel-file" type="button">取消</button>
         <button class="button button-primary" id="confirm-file" type="submit">创建文件</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog class="file-dialog" id="delete-dialog" aria-labelledby="delete-dialog-title">
+    <form id="delete-form">
+      <h2 id="delete-dialog-title">删除文件</h2>
+      <p id="delete-message" class="delete-message">确定要删除所选文件吗？删除后无法恢复。</p>
+      <p class="dialog-error" id="delete-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-secondary" id="cancel-delete" type="button">取消</button>
+        <button class="button button-danger" id="confirm-delete" type="submit">删除</button>
       </div>
     </form>
   </dialog>

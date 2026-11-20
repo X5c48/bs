@@ -112,6 +112,11 @@
       records.set(project.id, project);
       return project;
     },
+    remove: async id => {
+      await request(url(id), { method: 'DELETE' });
+      records.delete((id || '').toLowerCase());
+      return true;
+    },
     getReference: id => getMedia(id, 'project', 'reference'),
     getPresentation: (id, slot = 'selected') => getMedia(id, 'project', 'presentation/' + slot),
     getVideo: (id, slot) => getMedia(id, 'project', 'video/' + slot)

@@ -201,11 +201,26 @@
 
   function syncOperation() {
     const kind = $('#studioKind').value;
-    const instant=kind==='instant', isForm=kind==='form', isColor=kind==='color', isView=kind==='view';
+    const instant=kind==='instant', isRender=kind==='render', isForm=kind==='form', isColor=kind==='color', isView=kind==='view';
     const viewCount=isView?angles.read().length:0, imageTool=flow.isImageTool(kind);
     const expanding=kind==='outpaint';
     $('#studioExpandFields').hidden=!expanding;
     const direction=formControl.read();
+    // 影响力口径（方案 §7.3）：render/instant 为草图影响力 0–150%，其余为改动强度 25–95%，两档各自记忆。
+    const strengthInput=$('#studioStrength');
+    const influenceMode=instant||isRender;
+    strengthInput.min=influenceMode?'0':'25';
+    strengthInput.max=influenceMode?'150':'95';
+    strengthInput.step=influenceMode?'5':'1';
+    if(influenceMode){
+      strengthInput.value=strengthInput.dataset.influence||'80';
+      strengthInput.dataset.influence=strengthInput.value;
+    }else{
+      strengthInput.value=strengthInput.dataset.adjust||'55';
+      strengthInput.dataset.adjust=strengthInput.value;
+    }
+    $('#studioStrengthLabel').textContent=influenceMode?'草图影响力':'改动强度';
+    $('#studioStrengthField').hidden=imageTool||(isForm&&!!(direction.x||direction.y));
     $('#studioFidelityField').hidden=!instant;
     $('#studioVariation').hidden=!isForm&&!isColor&&!isView;
     formControl.root.hidden=!isForm;
@@ -214,7 +229,6 @@
     formControl.root.disabled=palette.root.disabled=angles.root.disabled=!!running;
     $('#studioPromptField').hidden=instant||imageTool;
     $('#studioPromptField label').textContent=isForm||isColor||viewCount?'补充说明（可选）':isView?'描述目标角度':'描述想要的结果';
-    $('#studioStrengthField').hidden=instant||imageTool||(isForm&&!!(direction.x||direction.y));
     const quantity=$('#studioQuantity'), allowed=flow.quantityOptions(kind);
     for(const item of quantity.options) item.hidden=item.disabled=!allowed.includes(Number(item.value));
     if(!allowed.includes(Number(quantity.value))) quantity.value='1';
@@ -445,6 +459,17 @@
     $('#studioLiveTime').textContent='';
     $('#studioLiveSize').textContent='';
   }
+  // Qwen 实时通道无 ControlNet：AI 强度滑块不参与，禁用并说明。
+  function syncLiveChannel() {
+    const qwen=qwenCheckpoint.test(flow.modelPrefs().checkpoint||'');
+    const input=$('#studioLiveStrength'), label=input.closest('.live-range');
+    input.disabled=qwen;
+    if(label){
+      label.classList.toggle('is-disabled',qwen);
+      label.title=qwen?'Qwen 实时通道不走 ControlNet，AI 强度不生效':'';
+    }
+    $('#studioLiveStrengthValue').textContent=qwen?'—':input.value+'%';
+  }
   function showLive(state) {
     const dot=$('#studioLiveDot');
     dot.dataset.state=state.status;
@@ -457,29 +482,47 @@
       $('#studioLiveSize').textContent='';
     }
     $('#studioLiveEmpty').hidden=!!liveUrl;
-    $('#studioLiveState').textContent=state.status==='running'?'正在渲染…':state.status==='failed'?'渲染失败':
+    const qwenLive=qwenCheckpoint.test(flow.modelPrefs().checkpoint||'');
+    $('#studioLiveState').textContent=state.status==='running'
+      ?(qwenLive?'正在渲染（Qwen 高质量 · 慢速）…':'正在渲染…')
+      :state.status==='failed'?'渲染失败':
       state.status==='paused'?'已暂停':state.status==='hd'?'正在生成高清帧…':
       state.status==='waiting'?'等待笔触':liveUrl?'已跟上最新笔触':'等待笔触';
     if(state.error)status($('#studioRunStatus'),state.error.message,true);
     syncLiveLayout();
   }
+  // Qwen-Image-2.1 是分体式模型（无 ControlNet），实时通道走慢速高质量预览。
+  const qwenCheckpoint=/^qwen[_ ]?image[_ ]?2\.?1/i;
   const live=window.WuyingWorkspaceRender.createLatestPreview({
     debounce:220,keepRunning:true,
     render:async(current,signal)=>{
       const model=flow.modelPrefs();
-      // 实时帧走 SD1.5 ControlNet 快速链路；Qwen-Image-2.1 是整图高质量通道，不支持实时。
-      if(/^qwen[_ ]?image[_ ]?2\.?1/i.test(model.checkpoint||''))
-        throw new Error('实时渲染需 SD1.5/SDXL 模型，Qwen-Image-2.1 请用「生成」按钮出高质量图。');
       const source=await compose.toPng(current,store);
       signal.throwIfAborted();
+      const prompt=[
+        $('#studioPrompt').value.trim()||'Industrial design concept preview.',
+        window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
+      ].filter(Boolean).join(' ');
+      // Qwen 实时通道：草图作参考图，按画质档降低分辨率（512/640/768）；
+      // 失败（8GB 显存不足等）自动降到 512 重试一次，仍失败才报错。
+      if(qwenCheckpoint.test(model.checkpoint||'')){
+        const run=resolution=>window.WuyingComfy.renderQwen({
+          endpoint:model.endpoint,checkpoint:model.checkpoint,prompt,sourceImage:source,seed:liveSeed,
+          resolution,slot:'qwen-live-'+assetId.slice(0,36),signal,cancelPending:true,onStatus:()=>{}
+        }).then(result=>result.blob);
+        const resolution={speed:512,balanced:640,quality:768}[liveTier]??640;
+        try{
+          return await run(resolution);
+        }catch(error){
+          if(signal.aborted||resolution<=512)throw error;
+          return await run(512);
+        }
+      }
       return window.WuyingWorkspaceRender.generate({
         kind:'render',provider:'comfy',preview:true,live:true,liveTier,source,signal,endpoint:model.endpoint,checkpoint:model.checkpoint,
         controlnet:model.controlnet,strength:Number($('#studioLiveStrength').value)/100,seed:liveSeed,slot:'live-'+assetId.slice(0,36),
         size:{width:current.width,height:current.height},
-        prompt:[
-          $('#studioPrompt').value.trim()||'Industrial design concept preview.',
-          window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
-        ].filter(Boolean).join(' ')
+        prompt
       });
     },
     onState:showLive
@@ -558,12 +601,14 @@
       scheduleLive();
     }
   }
-  // 高清增强：沿用当前草图、提示词、主题、种子与强度，跑 final 档二次采样放大到 1280×1024。
+  // 高清增强：沿用当前草图、提示词、主题、种子与强度。SD 走 final 档二次采样到 1280×1024；
+  // Qwen 走本通道 1024 原生分辨率（输出跟随草图长宽比）。
   function enhanceLive() {
     if(hdBusy||!liveBlob||gesture||saving||!liveEnabled)return;
     const current=asset();
     if(!current||!liveHasContent(current))return;
     const model=flow.modelPrefs();
+    const qwen=qwenCheckpoint.test(model.checkpoint||'');
     const controller=new AbortController();
     hdBusy=controller;
     live.cancel();
@@ -571,15 +616,21 @@
     (async()=>{
       const source=await compose.toPng(current,store);
       controller.signal.throwIfAborted();
-      const blob=await window.WuyingWorkspaceRender.generate({
-        kind:'render',provider:'comfy',source,signal:controller.signal,endpoint:model.endpoint,checkpoint:model.checkpoint,
-        controlnet:model.controlnet,strength:Number($('#studioLiveStrength').value)/100,seed:liveSeed,slot:'live-hd-'+assetId.slice(0,36),
-        liveTier,size:{width:current.width,height:current.height},
-        prompt:[
-          $('#studioPrompt').value.trim()||'Industrial design concept preview.',
-          window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
-        ].filter(Boolean).join(' ')
-      });
+      const prompt=[
+        $('#studioPrompt').value.trim()||'Industrial design concept preview.',
+        window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
+      ].filter(Boolean).join(' ');
+      const blob=qwen
+        ? (await window.WuyingComfy.renderQwen({
+            endpoint:model.endpoint,checkpoint:model.checkpoint,prompt,sourceImage:source,seed:liveSeed,
+            resolution:1024,slot:'qwen-live-hd-'+assetId.slice(0,36),signal:controller.signal,cancelPending:true
+          })).blob
+        : await window.WuyingWorkspaceRender.generate({
+          kind:'render',provider:'comfy',source,signal:controller.signal,endpoint:model.endpoint,checkpoint:model.checkpoint,
+          controlnet:model.controlnet,strength:Number($('#studioLiveStrength').value)/100,seed:liveSeed,slot:'live-hd-'+assetId.slice(0,36),
+          liveTier,size:{width:current.width,height:current.height},
+          prompt
+        });
       if(hdBusy!==controller)return;
       pushLiveFrame(blob);
       $('#studioLiveTime').textContent='';
@@ -617,9 +668,11 @@
     const field=$('#studioLiveModelField'), select=$('#studioLiveModel');
     const names=[...new Set([...(settings.checkpoints||[]),settings.checkpoint]
       .filter(name=>typeof name==='string'&&name))];
-    select.replaceChildren(...names.map(name=>new Option(name,name)));
+    select.replaceChildren(...names.map(name=>new Option(
+      qwenCheckpoint.test(name)?name+'（高质量 · 慢速实时）':name,name)));
     const current=flow.modelPrefs().checkpoint;
     if(names.includes(current))select.value=current;
+    syncLiveChannel();
     field.hidden=!names.length;
     // 冷启动只有当前模型时，向本机 ComfyUI 拉一次模型列表，让面板能直接换模型。
     if(!liveModelsFetched&&(!settings.provider||settings.provider==='comfy')&&settings.endpoint&&names.length<2){
@@ -961,6 +1014,7 @@
       throw Object.assign(new Error(shape?'请选择造型方向，或补充想要的变化。':colors?'请添加目标色，或补充想要的配色。':'请描述想要的修改。'),
         {field:shape||colors?undefined:'#studioPrompt'});
     }
+    const strengthValue = Number($('#studioStrength').value) / 100;
     const request = {
       kind,sourceId:assetId,prompt:kind==='instant'?'':prompt,fidelity:$('#studioFidelity').value,form:shape,palette:colors,views,
       outpaint:kind==='outpaint'?{direction:$('#studioExpandDirection').value,percent:Number($('#studioExpandPercent').value)}:undefined,
@@ -970,7 +1024,10 @@
       selection:kind === 'modify' && selectionValid() ? clone(selection) : undefined,
       provider:settings.provider,cloudModel:settings.cloudModel,apiProfileId:settings.apiProfileId,
       endpoint:settings.endpoint,checkpoint:settings.checkpoint,controlnet:settings.controlnet,
-      strength:Number($('#studioStrength').value) / 100,
+      // render/instant 用草图影响力口径；strength 兼容旧消费方，压回 0–1。
+      ...(kind==='instant'||kind==='render'
+        ?{influence:strengthValue,strength:Math.min(1,strengthValue)}
+        :{strength:strengthValue}),
       quantity:Number($('#studioQuantity').value),seed:retrySeed
     };
     retrySeed = undefined;
@@ -982,6 +1039,7 @@
     return {
       rerunOf:job.id,sourceId:assetId,provider:settings.provider,cloudModel:settings.cloudModel,apiProfileId:settings.apiProfileId,
       endpoint:settings.endpoint,checkpoint:settings.checkpoint,controlnet:settings.controlnet,
+      ...(prior.influence !== undefined ? {influence:prior.influence} : {}),
       strength:prior.strength,quantity:prior.quantity
     };
   }
@@ -1062,8 +1120,16 @@
       $('#studioExpandDirection').value=prior.outpaint.direction;
       $('#studioExpandPercent').value=String(prior.outpaint.percent);
     }
-    const strength = Number.isFinite(prior.strength) ? prior.strength : .55;
-    $('#studioStrength').value = Math.round(strength * 100);
+    const influenceMode = job.kind === 'instant' || job.kind === 'render';
+    if (influenceMode) {
+      const influence = Number.isFinite(prior.influence) ? prior.influence : (Number.isFinite(prior.strength) ? prior.strength : .8);
+      $('#studioStrength').dataset.influence = String(Math.round(influence * 100));
+      $('#studioStrength').value = String(Math.round(influence * 100));
+    } else {
+      const strength = Number.isFinite(prior.strength) ? prior.strength : .55;
+      $('#studioStrength').dataset.adjust = String(Math.round(strength * 100));
+      $('#studioStrength').value = String(Math.round(strength * 100));
+    }
     formControl.write(prior.form);
     palette.write(prior.palette);
     angles.write(prior.views);
@@ -1194,7 +1260,11 @@
   $('#studioReference').addEventListener('change',syncOperation);
   $('#studioQuantity').addEventListener('change',syncOperation);
   $('#studioFidelity').addEventListener('change',syncOperation);
-  $('#studioStrength').addEventListener('input',syncOperation);
+  $('#studioStrength').addEventListener('input',event => {
+    const kind = $('#studioKind').value;
+    event.target.dataset[(kind === 'instant' || kind === 'render') ? 'influence' : 'adjust'] = event.target.value;
+    syncOperation();
+  });
   $('#studioModelSettings').addEventListener('click',showModel);
   $('#studioCloseConnection').addEventListener('click',() => $('#studioConnection').close());
   $('#studioConnectForm').addEventListener('submit',checkModel);
@@ -1240,6 +1310,7 @@
     settings={...settings,checkpoint};
     flow.saveModel(settings);
     syncOperation();
+    syncLiveChannel();
     scheduleLive();
   });
   $('#studioLiveTheme').addEventListener('click',()=>themePop.hidden?openTheme():closeTheme());

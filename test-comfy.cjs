@@ -561,3 +561,116 @@ test('连接检测把 Qwen-Image-2.1 diffusion 模型并入基础模型列表，
     assert.equal(found.qwen.length, expectQwen ? 1 : 0);
   }
 });
+
+test('草图影响力：endPercent 联动 end_percent，未传时保持 1（实时链路不变）', () => {
+  const { liveWorkflow, workflow } = require('./dist/comfy.js');
+  const base = { input:'sketch', checkpoint:'v1-5.safetensors', controlnet:'scribble.safetensors', strength:.8, prompt:'x', inputImage:'a.png', seed:1 };
+  const endOf = opts => Object.values(liveWorkflow({ ...base, ...opts })).find(n => n.class_type === 'ControlNetApplyAdvanced').inputs.end_percent;
+  assert.equal(endOf({}), 1, '实时预览不传 endPercent 必须保持全程控制');
+  assert.equal(endOf({ quality:'preview' }), 1);
+  assert.equal(endOf({ quality:'final', tier:'quality' }), 1);
+  assert.equal(endOf({ endPercent:.88 }), .88);
+  const plain = workflow({ checkpoint:'v1-5.safetensors', controlnet:'scribble.safetensors', strength:1.2, prompt:'x', negative:'', image:'a.png', seed:1, endPercent:.64 });
+  const apply = Object.values(plain).find(n => n.class_type === 'ControlNetApplyAdvanced');
+  assert.equal(apply.inputs.strength, 1.2);
+  assert.equal(apply.inputs.end_percent, .64);
+});
+
+test('generate 放宽草图影响力到 0–1.5 并透传 endPercent', async t => {
+  let saveId;
+  const fetch = t.mock.method(global, 'fetch', async (url, init) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/upload/image') return Response.json({ name:'sketch.png', subfolder:'wuying' });
+    if (pathname === '/prompt') {
+      const graph = JSON.parse(init.body).prompt;
+      [saveId] = Object.entries(graph).find(([, n]) => n.class_type === 'SaveImage');
+      const [, apply] = Object.entries(graph).find(([, n]) => n.class_type === 'ControlNetApplyAdvanced');
+      assert.equal(apply.inputs.strength, 1.5);
+      assert.equal(apply.inputs.end_percent, 1);
+      return Response.json({ prompt_id:'influence-job' });
+    }
+    if (pathname === '/history/influence-job') {
+      return Response.json({ 'influence-job': { outputs: { [saveId]: { images: [{ filename:'out.png' }] } } } });
+    }
+    if (pathname === '/view') return new Response(resultImage);
+    assert.fail('Unexpected ' + pathname);
+  });
+  const result = await generate({ ...settings, strength:1.5, endPercent:1 });
+  assert.equal(await result.blob.text(), 'rendered image');
+  await assert.rejects(generate({ ...settings, strength:1.6 }), /0 到 1\.5/);
+  await assert.rejects(generate({ ...settings, strength:-0.1 }), /0 到 1\.5/);
+  fetch.mock.restore();
+});
+
+test('草图影响力映射：influence → strength + end_percent（方案 §7.3）', () => {
+  const fs = require('node:fs');
+  const vm = require('node:vm');
+  const window = {};
+  vm.runInContext(fs.readFileSync(__dirname + '/dist/workspace-render.js', 'utf8'),
+    vm.createContext({ window, Blob, URL }));
+  const { influenceMapping } = window.WuyingWorkspaceRender;
+  // vm 跨 realm 对象原型不同，逐字段断言。
+  const check=(input,strength,endPercent,message)=>{
+    const mapping=influenceMapping(input);
+    assert.equal(mapping.strength,strength,message);
+    assert.equal(mapping.endPercent,endPercent,message);
+  };
+  check(0,0,.4,'影响力 0：只控制前 40%');
+  check(.8,.8,.88,'方案默认 0.8');
+  check(1,1,1,'1 起全程控制');
+  check(1.5,1.5,1,'上限 1.5');
+  check(2,1.5,1,'超过 1.5 收敛到上限');
+  check(-.5,0,.4,'负值收敛到 0');
+  check('abc',0,.4,'非法输入收敛到 0');
+});
+
+test('Qwen 实时通道：分辨率透传编码器，中止时取消挂起任务', async t => {
+  const { renderQwen } = require('./dist/comfy.js');
+  const abort = new AbortController();
+  const paths = [];
+  const fetch = t.mock.method(global, 'fetch', async (url, init) => {
+    const { pathname } = new URL(url);
+    paths.push(pathname);
+    if (pathname === '/upload/image') return Response.json({ name:'lamp.png', type:'temp', subfolder:'wuying-live' });
+    if (pathname === '/prompt') {
+      const graph = JSON.parse(init.body).prompt;
+      assert.equal(graph['5'].inputs.resolution, 512, '画质档映射的分辨率必须传给编码器');
+      assert.equal(graph['14'].inputs.image.startsWith('wuying-live/lamp.png'), true);
+      abort.abort();
+      return Response.json({ prompt_id:'qwen-live-job' });
+    }
+    if (pathname === '/history/qwen-live-job') {
+      abort.abort();
+      return Response.json({});
+    }
+    if (pathname === '/api/jobs/qwen-live-job/cancel') {
+      assert.equal(init.method, 'POST');
+      return new Response(null, { status: 200 });
+    }
+    assert.fail('Unexpected ' + pathname);
+  });
+  await assert.rejects(renderQwen({
+    endpoint, checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp',
+    sourceImage: sketch, seed: 1, resolution: 512, slot:'qwen-live-1', cancelPending:true, signal: abort.signal
+  }), { name: 'AbortError' });
+  assert.ok(paths.includes('/api/jobs/qwen-live-job/cancel'), '实时通道必须能取消挂起的 Qwen 任务');
+  fetch.mock.restore();
+});
+
+test('Qwen 实时通道：分辨率越界回落 1024，取消挂起默认关闭', async t => {
+  const { renderQwen } = require('./dist/comfy.js');
+  const fetch = t.mock.method(global, 'fetch', async (url, init) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/upload/image') return Response.json({ name:'lamp.png', type:'temp' });
+    if (pathname === '/prompt') {
+      const graph = JSON.parse(init.body).prompt;
+      assert.equal(graph['5'].inputs.resolution, 1024, 'resolution 越界必须回落 1024');
+      return Response.json({ prompt_id:'qwen-res-job' });
+    }
+    if (pathname === '/history/qwen-res-job') return Response.json({ 'qwen-res-job': { outputs: { '11': { images: [{ filename:'q.png' }] } } } });
+    if (pathname === '/view') return new Response(resultImage);
+    assert.fail('Unexpected ' + pathname);
+  });
+  await renderQwen({ endpoint, checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp', sourceImage: sketch, seed: 2, resolution: 99999 });
+  fetch.mock.restore();
+});

@@ -540,3 +540,19 @@ test('Qwen-Image-2.1 路由：整图渲染走专用通道，实时帧与选区�
   assert.equal(calls[0][0], 'live');
   assert.equal(calls.length, 1);
 });
+
+test('草图影响力：render 快照含 influence 并透传出图；旧值回退 strength；instant 默认 0.8', async () => {
+  const { flow, calls } = load(new Blob(['source']));
+  const main = id();
+  const doc = { assets: { [main]: { id:main, name:'草图', width:64, height:48, layers:[{ blobId:id(), visible:true }] } }, blocks:{}, jobs:{} };
+  const store = memoryStore(doc, new Map());
+  const conn = { provider:'comfy', endpoint:'http://localhost:8188', checkpoint:'v1-5.safetensors', controlnet:'scribble.safetensors' };
+  const job = await flow.run(store, { kind:'render', inputs:[main], ...conn, influence:1.2, strength:.9 });
+  assert.equal(job.settings.influence, 1.2);
+  assert.equal(job.settings.strength, 1, '兼容字段压回 0–1');
+  assert.equal(calls.at(-1).influence, 1.2, 'influence 必须透传给出图通道');
+  const legacy = await flow.run(store, { kind:'render', inputs:[main], ...conn, strength:.65 });
+  assert.equal(legacy.settings.influence, .65, '旧项目无 influence 字段时回退原控形强度');
+  const instantJob = await flow.run(store, { kind:'instant', inputs:[main], ...conn, fidelity:'realistic' });
+  assert.equal(instantJob.settings.influence, .8, 'instant 未传时用方案默认 0.8');
+});

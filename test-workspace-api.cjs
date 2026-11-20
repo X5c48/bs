@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { mkdtempSync, rmSync } = require('node:fs');
+const { mkdtempSync, readdirSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
@@ -147,5 +147,62 @@ test('legacy account projects migrate once with independent documents even when 
   }finally{
     await stop();
     rmSync(directory,{recursive:true,force:true});
+  }
+});
+test('DELETE project removes rows, prunes orphan media files and keeps shared digests', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'wuying-workspace-'));
+  const { createWorkspaceServer } = require('./server/workspace-api.cjs');
+  const server = createWorkspaceServer({ directory });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const call = (path, { method = 'GET', body } = {}) => {
+    const headers = {};
+    if (method !== 'GET') headers.Origin = origin;
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    return fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  };
+  const mediaBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0uoAAAAASUVORK5CYII=', 'base64');
+  const asset = randomUUID();
+  const layer = randomUUID();
+  const blob = randomUUID();
+  const makeBackup = id => ({
+    format: 'wuying-project-v1',
+    project: { id, name: '项目' + id.slice(0, 4), createdAt: 100, updatedAt: 101 },
+    document: { assets: { [asset]: { id: asset, layers: [{ id: layer, blobId: blob }] } }, blocks: {}, jobs: {} },
+    media: [{ scope: 'workspace', key: blob, type: 'image/png', data: mediaBytes.toString('base64') }]
+  });
+  try {
+    const idA = randomUUID();
+    const idB = randomUUID();
+    assert.equal((await call('/api/projects/import', { method: 'POST', body: makeBackup(idA) })).status, 201);
+    assert.equal((await call('/api/projects/import', { method: 'POST', body: makeBackup(idB) })).status, 201);
+    assert.equal((await (await call('/api/projects')).json()).projects.length, 2);
+
+    const first = await call('/api/projects/' + idA, { method: 'DELETE' });
+    assert.equal(first.status, 200);
+    assert.equal((await first.json()).removed, true);
+    assert.equal((await call('/api/projects/' + idA)).status, 404);
+    assert.equal((await call('/api/projects/' + idA, { method: 'DELETE' })).status, 404);
+    assert.equal((await (await call('/api/projects')).json()).projects.length, 1);
+    assert.equal((await call('/api/projects/' + idB + '/media/workspace/' + blob)).status, 200);
+
+    const second = await call('/api/projects/' + idB, { method: 'DELETE' });
+    assert.equal(second.status, 200);
+    assert.ok((await second.json()).removedFiles >= 1, '最后一个项目删除时应清理孤儿媒体文件');
+    assert.equal((await (await call('/api/projects')).json()).projects.length, 0);
+    assert.equal((await call('/api/projects/' + idB + '/media/workspace/' + blob)).status, 404);
+    const files = [];
+    const walk = dir => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(join(dir, entry.name));
+        else files.push(entry.name);
+      }
+    };
+    walk(join(directory, 'media'));
+    assert.equal(files.length, 0, '删除后媒体目录不应残留孤儿文件');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    rmSync(directory, { recursive: true, force: true });
   }
 });

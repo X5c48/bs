@@ -423,7 +423,16 @@
     const { image, guide, bounds } = await alignedInput(source, !!controlnet, signal);
     signal?.throwIfAborted();
     let strength = amount;
-    if (!sketch) {
+    let endPercent;
+    if (sketch) {
+      // 草图影响力（对标方案 §7.3 Drawing Influence）：0–1.5，联动 end_percent 提前截断控制。
+      // 实时渲染不传 influence，走原 strength 行为，链路完全不变。
+      if (Number.isFinite(options.influence)) {
+        const mapping = influenceMapping(options.influence);
+        strength = mapping.strength;
+        endPercent = mapping.endPercent;
+      }
+    } else {
       const [maximum, minimum] = preservation[kind];
       strength = maximum - (maximum - minimum) * (amount - .25) / .7;
     }
@@ -433,6 +442,7 @@
     const latentWidth=Math.round(modelWidth*latentScale/8)*8, latentHeight=Math.round(modelHeight*latentScale/8)*8;
     const { blob } = await comfy.renderLive({ ...shared, input:sketch ? 'sketch' : 'image',
       quality:options.live?'live':options.preview?'preview':'final', sourceImage:image, colorGuideImage:guide, controlnet, strength,
+      ...(endPercent !== undefined ? { endPercent } : {}),
       latentWidth,latentHeight,tier,
       negative:'lowres, worst quality, low quality, jpeg artifacts, blurry, out of focus, watermark, unwanted text, duplicate objects, clutter, bad anatomy, deformed, oversaturated'
     });
@@ -448,6 +458,14 @@
     return output;
   }
 
+  // 草图影响力 → ControlNet 参数映射（方案 §7.3）：
+  // strength = min(influence, 1.5)；end_percent = influence ≥ 1 ? 1 : 0.4 + 0.6 × influence。
+  // 影响力 0 时 ControlNet 只作用于前 40% 步数，让模型更自由；≥1 时全程控制。
+  function influenceMapping(influence) {
+    const value = Math.min(1.5, Math.max(0, Number(influence) || 0));
+    return { strength: value, endPercent: value >= 1 ? 1 : Math.round((.4 + .6 * value) * 1000) / 1000 };
+  }
+
   // 方案级主题 → 内部提示词。主体锁定恒定；主题只描述风格方向，自定义提示词覆盖方向部分。
   function themeDirective(theme) {
     if (!theme || typeof theme !== 'object') return '';
@@ -458,5 +476,5 @@
     return direction + ' Keep the sketched product as the fixed main subject: preserve its product category, silhouette, proportions, parts and camera angle. Apply this direction only to styling, materials, colors, lighting and scene context; never change the product structure.';
   }
 
-  window.WuyingWorkspaceRender = { generate, cloudPrompt, imagePalette, createLatestPreview, liveSnapshot, themeDirective };
+  window.WuyingWorkspaceRender = { generate, cloudPrompt, imagePalette, createLatestPreview, liveSnapshot, themeDirective, influenceMapping };
 })();

@@ -25,11 +25,22 @@
   const importFile = document.getElementById('import-backup');
   const legacySection = document.getElementById('legacy-projects');
   const legacyList = document.getElementById('legacy-list');
+  const selectionBar = document.getElementById('selection-bar');
+  const selectionCount = document.getElementById('selection-count');
+  const clearSelection = document.getElementById('clear-selection');
+  const deleteSelected = document.getElementById('delete-selected');
+  const deleteDialog = document.getElementById('delete-dialog');
+  const deleteForm = document.getElementById('delete-form');
+  const deleteMessage = document.getElementById('delete-message');
+  const deleteError = document.getElementById('delete-error');
+  const confirmDelete = document.getElementById('confirm-delete');
   const date = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' });
   const compareNames = new Intl.Collator('zh-CN', { numeric: true }).compare;
   const imageUrls = new Set();
+  const selected = new Set();
   let editing = null;
   let previousFocus = null;
+  let deleteFocus = null;
   let coverVersion = 0;
 
   const fileLink = projectId => 'workbench.html?project=' + encodeURIComponent(projectId);
@@ -37,6 +48,16 @@
   function showFeedback(message) {
     feedback.textContent = message;
     feedback.hidden = !message;
+  }
+
+  function syncSelection() {
+    selectionBar.hidden = !selected.size;
+    selectionCount.textContent = selected.size ? '已选 ' + selected.size + ' 个文件' : '已选 0 个文件';
+    deleteSelected.disabled = !selected.size;
+    clearSelection.disabled = !selected.size;
+    for (const box of grid.querySelectorAll('input.file-select')) {
+      box.checked = selected.has(box.dataset.projectId);
+    }
   }
 
   function showForm(project, trigger) {
@@ -133,6 +154,18 @@
     const item = document.createElement('li');
     item.className = 'file-card';
 
+    const select = document.createElement('input');
+    select.type = 'checkbox';
+    select.className = 'file-select';
+    select.checked = selected.has(project.id);
+    select.dataset.projectId = project.id;
+    select.setAttribute('aria-label', '选择文件 ' + project.name);
+    select.addEventListener('change', () => {
+      if (select.checked) selected.add(project.id);
+      else selected.delete(project.id);
+      syncSelection();
+    });
+
     const link = document.createElement('a');
     link.className = 'file-link';
     link.href = fileLink(project.id);
@@ -166,13 +199,16 @@
 
     detail.append(heading, time);
     link.append(detail);
-    item.append(link, rename);
+    item.append(select, link, rename);
     loadCover(preview, project, version);
     return item;
   }
 
   function render() {
     const projects = store.list();
+    for (const id of [...selected]) {
+      if (!projects.some(project => project.id === id)) selected.delete(id);
+    }
     const query = search.value.trim().toLocaleLowerCase('zh-CN');
     const matches = projects.filter(project => project.name.toLocaleLowerCase('zh-CN').includes(query));
     if (sort.value === 'name') matches.sort((a, b) => compareNames(a.name, b.name));
@@ -187,7 +223,53 @@
     emptyTitle.textContent = query ? '找不到匹配的文件' : '还没有文件';
     emptyDescription.textContent = query ? '试试其他关键词。' : '新建文件后，可以在工作台里画图或导入图片。';
     emptyAction.textContent = query ? '清除搜索' : '新建文件';
+    syncSelection();
   }
+
+  clearSelection.addEventListener('click', () => {
+    selected.clear();
+    syncSelection();
+  });
+
+  deleteSelected.addEventListener('click', () => {
+    const names = store.list().filter(project => selected.has(project.id)).map(project => project.name);
+    if (!names.length) return;
+    deleteMessage.textContent = names.length === 1
+      ? '确定要删除「' + names[0] + '」吗？删除后无法恢复。'
+      : '确定要删除所选的 ' + names.length + ' 个文件吗？删除后无法恢复。';
+    deleteError.hidden = true;
+    deleteFocus = document.activeElement;
+    deleteDialog.showModal();
+  });
+
+  document.getElementById('cancel-delete').addEventListener('click', () => deleteDialog.close());
+  deleteDialog.addEventListener('close', () => {
+    if (deleteFocus?.isConnected) deleteFocus.focus();
+    deleteFocus = null;
+  });
+  deleteForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const targets = [...selected];
+    confirmDelete.disabled = true;
+    let removed = 0;
+    let failure = null;
+    for (const id of targets) {
+      try {
+        await store.remove(id);
+        selected.delete(id);
+        removed += 1;
+      } catch (error) { failure = error; break; }
+    }
+    confirmDelete.disabled = false;
+    render();
+    if (removed) showFeedback(removed === 1 ? '已删除 1 个文件。' : '已删除 ' + removed + ' 个文件。');
+    if (failure) {
+      deleteError.textContent = failure.message || '无法删除文件，请重试。';
+      deleteError.hidden = false;
+      return;
+    }
+    deleteDialog.close();
+  });
 
   newFile.addEventListener('click', () => showForm(null, newFile));
   emptyAction.addEventListener('click', () => {

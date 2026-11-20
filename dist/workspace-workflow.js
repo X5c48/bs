@@ -212,7 +212,7 @@
   function blockRequest(block) {
     const b=migrateBlock(block);
     return {kind:b.kind,blockId:b.id,inputs:[...b.inputs],roles:{...(b.roles||{})},prompt:b.prompt||'',
-      quantity:b.quantity,strength:b.strength,aspect:b.aspect,customW:b.customW,customH:b.customH,
+      quantity:b.quantity,strength:b.strength,...(b.influence!==undefined?{influence:b.influence}:{}),aspect:b.aspect,customW:b.customW,customH:b.customH,
       mode:b.mode,resolution:b.resolution,style:b.style,fidelity:b.fidelity,stageStyle:b.stageStyle,form:b.form,palette:b.palette,views:b.views};
   }
 
@@ -368,9 +368,14 @@
     const controlnet=String(options.controlnet??defaults.controlnet??'');
     const distance=form?Math.hypot(form.x,form.y)/Math.SQRT2/100:0;
     const strengthValue=views.length&&prior?priorSettings.strength:options.strength??priorSettings.strength;
-    const strength=distance
+    let strength=distance
       ? priorSettings.strength??(.35+.60*distance)
       : Math.min(.95,Math.max(.25,Number(strengthValue)||.65));
+    // 草图影响力（方案 §7.3）：render/instant 走 0–1.5 口径，旧项目回退 block.strength；其余 kind 保持调整幅度语义。
+    const influenceKind=kind==='render'||kind==='instant';
+    const rawInfluence=influenceKind?options.influence??priorSettings.influence??options.strength??priorSettings.strength:undefined;
+    const influence=influenceKind?(Number.isFinite(Number(rawInfluence))?Math.min(1.5,Math.max(0,Number(rawInfluence))):.8):undefined;
+    if(influenceKind) strength=Math.min(1,influence);
     const quantity=imageTool||expanding?1:views.length||quantityFor(kind,options.quantity??priorSettings.quantity);
     const seed=Number.isSafeInteger(options.seed)&&options.seed>=0&&options.seed<=0xffffffff
       ? options.seed : crypto.getRandomValues(new Uint32Array(1))[0];
@@ -407,7 +412,8 @@
       blockId:blockId||null,prompt:instant||imageTool?'':prompt,selection,rerunOf:prior?prior.id:undefined,
       references:references.map(({id,role,blobId})=>({id,role,blobId})),outputs:[],createdAt:now,status:'running',
       settings:{...connectionSettings,
-        strength,quantity,seed,aspect,customW,customH,mode,resolution,style,width:size.width,height:size.height}};
+        strength,quantity,seed,aspect,customW,customH,mode,resolution,style,width:size.width,height:size.height,
+        ...(influenceKind?{influence}:{})}};
     if(outpaint)job.settings.outpaint=outpaint;
     if(partSource) Object.assign(job,{partSource,protectedAreas});
     if(asset.draft||prior?.draftRevision) job.draftRevision=prior?.draftRevision||asset.draft.revision;
@@ -435,6 +441,7 @@
           ? (await window.WuyingComfy.runImageTool({kind,endpoint,sourceImage:source,size,slot,signal,onStatus:onProgress})).blob
           : await window.WuyingWorkspaceRender.generate({
           kind,source,selection,protectedAreas,outpaint,prompt:view?viewPrompts[view]:renderPrompt,references,provider,cloudModel,apiProfile,endpoint,checkpoint,controlnet,strength,
+          ...(influenceKind?{influence}:{}),
           size,mode,resolution:cloudResolution(size,resolution),
           seed:(seed+i)>>>0,slot,signal,onStatus:onProgress
         });

@@ -3,7 +3,7 @@
 const http = require('node:http');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
-const { createReadStream, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } = require('node:fs');
+const { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } = require('node:fs');
 const { extname, join, resolve, sep } = require('node:path');
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
@@ -178,7 +178,10 @@ function createWorkspaceServer({ directory, staticDirectory = join(__dirname, '.
     putMedia: `INSERT INTO media VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (owner, project, scope, key) DO UPDATE
       SET digest = excluded.digest, type = excluded.type, size = excluded.size, metadata = excluded.metadata`,
-    dropMedia: 'DELETE FROM media WHERE owner = ? AND project = ? AND scope = ? AND key = ?'
+    dropMedia: 'DELETE FROM media WHERE owner = ? AND project = ? AND scope = ? AND key = ?',
+    dropProjectMedia: 'DELETE FROM media WHERE owner = ? AND project = ?',
+    dropProject: 'DELETE FROM projects WHERE owner = ? AND id = ?',
+    referencedDigests: 'SELECT DISTINCT digest FROM media'
   }).map(([key, value]) => [key, db.prepare(value)]));
 
   function transaction(work) {
@@ -194,6 +197,22 @@ function createWorkspaceServer({ directory, staticDirectory = join(__dirname, '.
   }
 
   function mediaPath(digest) { return join(mediaRoot, digest.slice(0, 2), digest); }
+
+  function pruneMediaFiles() {
+    const referenced = new Set(sql.referencedDigests.all().map(row => row.digest));
+    let removed = 0;
+    if (!existsSync(mediaRoot)) return removed;
+    for (const prefix of readdirSync(mediaRoot)) {
+      const bucket = join(mediaRoot, prefix);
+      if (!statSync(bucket).isDirectory()) continue;
+      for (const digest of readdirSync(bucket)) {
+        if (referenced.has(digest)) continue;
+        rmSync(join(bucket, digest), { force: true });
+        removed += 1;
+      }
+    }
+    return removed;
+  }
 
   function saveMedia(owner, project, items, replace = false) {
     for (const item of items) {
@@ -290,6 +309,14 @@ function createWorkspaceServer({ directory, staticDirectory = join(__dirname, '.
       const projectId = id.toLowerCase();
       const row = sql.project.get(owner, projectId);
       if (!row) throw new WorkspaceError(404, '找不到这个物映文件。');
+      if (!section && method === 'DELETE') {
+        transaction(() => {
+          sql.dropProjectMedia.run(owner, projectId);
+          sql.dropProject.run(owner, projectId);
+        });
+        const removedFiles = pruneMediaFiles();
+        return send(res, 200, { removed: true, removedFiles });
+      }
       if (!section && method === 'GET') return send(res, 200, { project: JSON.parse(row.metadata) });
       if (!section && method === 'PATCH') {
         const data = await readJson(req, 4096);

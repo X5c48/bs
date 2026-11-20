@@ -673,8 +673,13 @@
     const mode=options(modeNames,block.mode||'standard');mode.id='blockMode';
     const resolution=options(resolutionNames,block.resolution||'match');resolution.id='blockResolution';
     const qty=options(flow.quantityOptions(block.kind).map(count=>[String(count),count+' 张']),String(block.quantity||1));qty.id='blockQuantity';
-    const strength=el('input');strength.type='range';strength.min='25';strength.max='95';strength.value=Math.round((block.strength||.65)*100);
-    const strengthField=field('',strength), label=block.kind==='render'?'控形强度':'调整幅度';
+    // render（提示渲染）用草图影响力 0–1.5（方案 §7.3）；其余 kind 保持调整幅度 25–95%。
+    const isRender=block.kind==='render';
+    const strength=el('input');strength.type='range';
+    if(isRender){strength.min='0';strength.max='150';strength.step='5';
+      strength.value=Math.round((block.influence??block.strength??.8)*100);}
+    else{strength.min='25';strength.max='95';strength.value=Math.round((block.strength||.65)*100);}
+    const strengthField=field('',strength), label=isRender?'草图影响力':'调整幅度';
     const variationsChanged=()=>{showStrength();showSummary();void editBlock(block.id,snapshot(),false);};
     const formControl=block.kind==='form'?variations.form(block.form,variationsChanged):null;
     const palette=block.kind==='color'?variations.palette(block.palette,async()=>{
@@ -692,7 +697,8 @@
       strengthField.firstElementChild.textContent=label+' · '+strength.value+'%';
     }
     showStrength();strength.oninput=showStrength;
-    const snapshot=()=>({prompt:prompt.value,quantity:Number(qty.value),strength:Number(strength.value)/100,
+    const snapshot=()=>({prompt:prompt.value,quantity:Number(qty.value),
+      ...(isRender?{influence:Number(strength.value)/100,strength:Math.min(1,Number(strength.value)/100)}:{strength:Number(strength.value)/100}),
       aspect:aspect.value,customW:Number(customW.value)||4,customH:Number(customH.value)||3,mode:mode.value,resolution:resolution.value,
       style:$('blockStyle')?.value||block.style||'none',
       ...(formControl?{form:formControl.read()}:{}),...(palette?{palette:palette.read()}:{}),...(angles?{views:angles.read()}:{})});
@@ -753,14 +759,21 @@
   function drawInstantInspector(form,block,inputs){
     const fidelity=options(flow.fidelityOptions,block.fidelity||'auto');fidelity.id='blockFidelity';
     const qty=options([['1','1 张'],['2','2 张'],['4','4 张']],String(block.quantity||1));qty.id='blockQuantity';
+    // 草图影响力（方案 §7.3）：快速渲染同样暴露 0–1.5 滑块。
+    const influence=el('input');influence.type='range';influence.min='0';influence.max='150';influence.step='5';
+    influence.value=Math.round((block.influence??block.strength??.8)*100);influence.id='blockInfluence';
+    const influenceField=field('',influence);
+    const showInfluence=()=>{influenceField.firstElementChild.textContent='草图影响力 · '+influence.value+'%';};
+    showInfluence();influence.oninput=showInfluence;
     const primary=doc.assets[inputs.at(-1)];
     const targetNote=el('p',undefined,'wb-panel-copy');
     const style=options(Object.entries(flow.stylePresets).map(([key,preset])=>[key,preset.label]),block.stageStyle||'none');
     const styleField=field('风格预设',style);
-    form.append(field('目标阶段',fidelity),styleField,field('数量',qty),targetNote,
+    form.append(field('目标阶段',fidelity),styleField,influenceField,field('数量',qty),targetNote,
       el('p','可添加一张风格或配色参考。输出保持源图尺寸。','wb-panel-copy'));
     const summary=el('p',undefined,'wb-model-state');summary.id='blockSummary';
-    const settings=()=>({fidelity:fidelity.value,stageStyle:style.value,quantity:Number(qty.value)});
+    const settings=()=>({fidelity:fidelity.value,stageStyle:style.value,quantity:Number(qty.value),
+      influence:Number(influence.value)/100,strength:Math.min(1,Number(influence.value)/100)});
     const update=()=>{
       const target=flow.resolveFidelity(doc,primary,fidelity.value);
       styleField.hidden=!['shaded','realistic'].includes(target);

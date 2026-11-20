@@ -116,7 +116,8 @@
     return { unet, clip, vae };
   }
 
-  function workflow({ checkpoint, controlnet, strength, prompt, negative, image, seed }) {
+  // endPercent：草图影响力联动（<1 时提前截断 ControlNet），不传则全程控制，兼容旧调用与实时链路。
+  function workflow({ checkpoint, controlnet, strength, prompt, negative, image, seed, endPercent }) {
     const node = (class_type, inputs) => ({ class_type, inputs });
     return {
       1: node('CheckpointLoaderSimple', { ckpt_name: checkpoint }),
@@ -127,7 +128,7 @@
       6: node('ControlNetLoader', { control_net_name: controlnet }),
       7: node('ControlNetApplyAdvanced', {
         positive: ['2', 0], negative: ['3', 0], control_net: ['6', 0], image: ['5', 0],
-        strength, start_percent: 0, end_percent: 1
+        strength, start_percent: 0, end_percent: endPercent ?? 1
       }),
       8: node('EmptyLatentImage', { width: 640, height: 512, batch_size: 1 }),
       9: node('KSampler', {
@@ -141,7 +142,7 @@
 
   // latentWidth/latentHeight：实时档分辨率，须为 modelWidth/modelHeight 的等比缩放且 8 对齐，
   // 这样 cropResult 仍按同一坐标系裁切，比例不会变形。tier 决定步数与画质。
-  function liveWorkflow({input,quality,checkpoint,controlnet,strength,prompt,negative='',inputImage,colorGuide,seed,latentWidth=640,latentHeight=512,tier='balanced'}) {
+  function liveWorkflow({input,quality,checkpoint,controlnet,strength,prompt,negative='',inputImage,colorGuide,seed,latentWidth=640,latentHeight=512,tier='balanced',endPercent}) {
     const node=(class_type,inputs)=>({class_type,inputs});
     const graph={
       1:node('CheckpointLoaderSimple',{ckpt_name:checkpoint}),
@@ -160,7 +161,7 @@
       graph[6]=node('ControlNetLoader',{control_net_name:controlnet});
       graph[7]=node('ControlNetApplyAdvanced',{
         positive,negative:negativeInput,control_net:['6',0],image:[graph[5]?'5':'4',0],
-        strength,start_percent:0,end_percent:1,vae:['1',2]
+        strength,start_percent:0,end_percent:endPercent??1,vae:['1',2]
       });
       positive=['7',0];negativeInput=['7',1];
     }
@@ -327,17 +328,17 @@
     }
   }
 
-  async function generate({endpoint,checkpoint,controlnet,strength,prompt,negative='',sketch,signal,onStatus}){
+  async function generate({endpoint,checkpoint,controlnet,strength,prompt,negative='',sketch,signal,onStatus,endPercent}){
     signal?.throwIfAborted();
     if(typeof checkpoint!=='string'||!checkpoint.trim()||typeof controlnet!=='string'||!controlnet.trim()){
       throw new Error('请先选择 SD1.5 主模型与匹配的 Scribble ControlNet。');
     }
     if(typeof prompt!=='string'||!prompt.trim()||typeof negative!=='string')throw new Error('请填写生成提示词。');
-    if(!Number.isFinite(strength)||strength<0||strength>1)throw new Error('草图控形强度须在 0 到 1 之间。');
+    if(!Number.isFinite(strength)||strength<0||strength>1.5)throw new Error('草图影响力须在 0 到 1.5 之间。');
     if(!(sketch instanceof Blob)||!sketch.size||sketch.type!=='image/png')throw new Error('控形草图必须为 PNG 图像。');
     const seed=crypto.getRandomValues(new Uint32Array(1))[0];
     return runWorkflow({endpoint,inputBlob:sketch,signal,onStatus,
-      build:image=>workflow({checkpoint,controlnet,strength,prompt,negative,image,seed})});
+      build:image=>workflow({checkpoint,controlnet,strength,prompt,negative,image,seed,endPercent})});
   }
 
   async function renderLive(options){
@@ -350,7 +351,8 @@
     }
     if(colorGuideImage&&(!(colorGuideImage instanceof Blob)||!colorGuideImage.size||colorGuideImage.type!=='image/png'
       ||input!=='sketch'||!controlnet))throw new Error('配色参考需为与草图控形图对齐的 PNG。');
-    const strength=Math.min(1,Math.max(0,Number(options.strength)||0));
+    // 实时滑块上限 95%，不受 1.5 影响；出图链路的影响力可到 1.5，经 endPercent 提前截断。
+    const strength=Math.min(1.5,Math.max(0,Number(options.strength)||0));
     const seed=Number.isInteger(options.seed)&&options.seed>=0?options.seed:crypto.getRandomValues(new Uint32Array(1))[0];
     return runWorkflow({endpoint,inputBlob:input==='text'?null:sourceImage,guideBlob:colorGuideImage,slot,signal,onStatus,
       cancelPending:true,pollInterval:quality==='live'?200:600,
@@ -408,6 +410,8 @@
       ? options.seed : crypto.getRandomValues(new Uint32Array(1))[0];
     return runWorkflow({
       endpoint, inputBlob: sourceImage || null, slot, signal, onStatus, pollInterval: 600,
+      // 实时通道（Qwen 慢速预览）需要取消挂起任务；默认保持旧行为。
+      cancelPending: options.cancelPending === true,
       build: reference => qwenWorkflow({ checkpoint: checkpoint.trim(), prompt, negative, reference, seed, resolution })
     });
   }
@@ -502,7 +506,7 @@
       pollInterval:600,build:image=>imageToolWorkflow({kind,image,model,size})});
   }
 
-  const api = { testConnection, testKreaConnection, generate, renderLive, renderQwen, renderKrea, renderRegion, liveWorkflow, qwenWorkflow, kreaWorkflow, runImageTool };
+  const api = { testConnection, testKreaConnection, generate, renderLive, renderQwen, renderKrea, renderRegion, liveWorkflow, qwenWorkflow, kreaWorkflow, runImageTool, workflow };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') window.WuyingComfy = api;
 }());

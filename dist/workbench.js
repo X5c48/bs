@@ -280,9 +280,23 @@
     closeMenus();const id=uid(),time=Date.now(),at=vacant(startAt());
     try{
       await save(current=>{current.assets[id]={id,name:'草图 '+(Object.keys(current.assets).length+1),...at,width:1024,height:768,createdAt:time,updatedAt:time,
+        // 首页「新建文件」填写的产品方向一次性继承给第一张画布。
+        ...(briefFromLocation()?{flow:{brief:briefFromLocation()}}:{}),
         layers:[{id:uid(),name:'草图',kind:'ink',strokes:[],visible:true,opacity:1}]};});
+      // 用掉一次性 brief，避免之后新建的画布误继承。
+      if(briefFromLocation()) history.replaceState(null,'',location.pathname+query);
       location.assign(studioLink(id));
     }catch{}
+  }
+  function briefFromLocation(){
+    try{
+      const raw=new URLSearchParams(location.search).get('brief');
+      if(!raw) return null;
+      const value=JSON.parse(raw);
+      const category=typeof value?.category==='string'?value.category.slice(0,30):'';
+      const text=typeof value?.text==='string'?value.text.slice(0,200):'';
+      return category||text?{category,text}:null;
+    }catch{return null;}
   }
   async function importFiles(files,at=startAt()){
     const allowed=[...files].filter(workspaceAssets.accepts);

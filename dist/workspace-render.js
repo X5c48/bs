@@ -9,14 +9,17 @@
     modify: 'Apply the requested change. Preserve the unmentioned details, object proportions, camera and lighting.',
     color: 'Product colorway. Change colors while retaining the same geometry, seams, materials, camera and background.',
     form: 'Product form exploration. Vary the requested geometry while retaining the product category, scale, function and presentation.',
-    view: 'Reimagine the same product from the requested camera angle. Preserve its recognizable geometry, materials and details.'
+    view: 'Reimagine the same product from the requested camera angle. Preserve its recognizable geometry, materials and details.',
+    studio: 'High-end studio product photography. Keep the product identity, silhouette and proportions.',
+    scene: 'A single real physical product placed naturally in this photographed scene, built exactly from the sketched outline with no extra parts. Keep the surrounding wall, surfaces and edges continuous. Match the scene lighting, perspective, contact shadows and color temperature. Photorealistic.'
   };
   // renderLive exposes image-to-image strength as preservation, inverse to edit intensity.
   const preservation = {
     modify: [0.95, 0.25],
     color: [0.95, 0.68],
     form: [0.72, 0.25],
-    view: [0.58, 0.25]
+    view: [0.58, 0.25],
+    studio: [0.9, 0.3]
   };
   const referenceLabels = {
     color: 'Color reference palette',
@@ -254,6 +257,169 @@
     return render({ ...providerArgs,prompt,image:source,references,signal,size:options.size });
   }
 
+  // 模块 5：情境渲染。底图是不含笔触的照片，草图单独作控形；只重绘选区，选区外逐像素保留照片。
+  async function generateScene(options) {
+    const { source, selection, signal, onStatus, scene } = options;
+    const mask = window.WuyingImageSelection;
+    if (!isPng(scene?.photo) || !isPng(scene?.sketch)) throw new Error('情境渲染需要照片和草图快照。');
+    if (!mask.enough(selection || [])) throw new Error('请圈出产品要放置的区域。');
+    onStatus?.('正在裁出草图区域…');
+    const base = await mask.prepare(scene.photo, selection);
+    signal?.throwIfAborted();
+    const amount = Number.isFinite(options.strength) ? clamp(options.strength, .25, .95) : .85;
+    if (options.provider === 'runninghub' || options.provider === 'imageapi') {
+      const custom = options.provider === 'imageapi', render = custom ? profileRender : cloudRender;
+      const withSketch = await mask.prepare(source, selection);
+      const { width, height } = await sizeOf(base.sourceImage);
+      onStatus?.(custom ? '正在请求图片接口…' : '正在上传 RunningHub 并排队…');
+      const prompt = cloudPrompt('scene', String(options.prompt || '').trim(), options.references || [], true);
+      const patch = await render({ model:options.cloudModel, apiProfile:options.apiProfile, mode:options.mode, resolution:options.resolution,
+        prompt, image:withSketch.sourceImage, references:options.references || [], signal });
+      signal?.throwIfAborted();
+      return mask.composite(base, await fitTo(patch, width, height), { feather:14 });
+    }
+    if (/^qwen[_ ]?image[_ ]?2\.?1/i.test(String(options.checkpoint || ''))) throw new Error('情境渲染需要选区重绘，请换 SD1.5 模型。');
+    const guide = await mask.prepare(scene.sketch, selection);
+    signal?.throwIfAborted();
+    const prompt = [String(options.prompt || '').trim(), intents.scene].filter(Boolean).join(' ');
+    const { blob } = await window.WuyingComfy.renderRegion({
+      endpoint:options.endpoint, checkpoint:options.checkpoint, seed:options.seed, slot:options.slot, signal, onStatus, prompt,
+      sourceImage:base.sourceImage, maskImage:base.maskImage, guideImage:guide.sourceImage,
+      controlnet:options.controlnet, controlStrength:.95, denoise:amount
+    });
+    signal?.throwIfAborted();
+    return mask.composite(base, await matchEdges(base.sourceImage, blob), { feather:24 });
+  }
+
+  // 重绘后 VAE 往返会让背景整体偏色，在选区边缘留下方框。取裁切图四周 6% 宽的边带，
+  // 求生成图与原照片的平均色差，从整块补丁里减掉，使边缘与照片对齐。
+  async function matchEdges(originalBlob, patchBlob) {
+    const [original, patch] = await Promise.all([createImageBitmap(originalBlob), createImageBitmap(patchBlob)]);
+    try {
+      const width = original.width, height = original.height;
+      const read = bitmap => {
+        const canvas = makeCanvas(width, height), context = canvas.getContext('2d', { willReadFrequently:true });
+        context.drawImage(bitmap, 0, 0, width, height);
+        return { canvas, context, data:context.getImageData(0, 0, width, height) };
+      };
+      const a = read(original).data.data, target = read(patch), b = target.data.data;
+      const band = Math.max(4, Math.round(Math.min(width, height) * .06));
+      const sum = [0, 0, 0];
+      let count = 0;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        if (x >= band && x < width - band && y >= band && y < height - band) continue;
+        const i = (y * width + x) * 4;
+        for (let c = 0; c < 3; c++) sum[c] += b[i + c] - a[i + c];
+        count++;
+      }
+      const shift = sum.map(value => value / Math.max(1, count));
+      if (shift.every(value => Math.abs(value) < 1)) return patchBlob;
+      for (let i = 0; i < b.length; i += 4) for (let c = 0; c < 3; c++) b[i + c] = clamp(Math.round(b[i + c] - shift[c]), 0, 255);
+      target.context.putImageData(target.data, 0, 0);
+      return await toPng(target.canvas);
+    } finally { original.close(); patch.close(); }
+  }
+
+  // 模块 4：材质特写取景框。有选区取选区外接框，否则取中心一半宽；外扩成 5:4 并夹在图内，最小为短边 12%。
+  function detailBox(width, height, selection) {
+    const ratio = modelWidth / modelHeight;
+    let cx = width / 2, cy = height / 2, w = width / 2, h = w / ratio;
+    if (Array.isArray(selection) && selection.length >= 3) {
+      const xs = selection.map(p => p.x * width), ys = selection.map(p => p.y * height);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      cx = (x0 + x1) / 2; cy = (y0 + y1) / 2;
+      w = Math.max(x1 - x0, (y1 - y0) * ratio, Math.min(width, height) * .12 * ratio);
+      h = w / ratio;
+    }
+    if (h > height) { h = height; w = h * ratio; }
+    if (w > width) { w = width; h = w / ratio; }
+    const x = clamp(cx - w / 2, 0, width - w), y = clamp(cy - h / 2, 0, height - h);
+    const r = v => Math.round(v * 100) / 100;
+    return { x:r(x), y:r(y), width:r(w), height:r(h) };
+  }
+
+  async function cropDetail(source, selection) {
+    const bitmap = await createImageBitmap(source);
+    try {
+      const box = detailBox(bitmap.width, bitmap.height, selection);
+      const canvas = makeCanvas(modelWidth, modelHeight), context = canvas.getContext('2d');
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(bitmap, box.x, box.y, box.width, box.height, 0, 0, modelWidth, modelHeight);
+      return { image:await toPng(canvas), box };
+    } finally { bitmap.close(); }
+  }
+
+  // 线稿判定：缩到 96 像素宽采样，深色像素（亮度 < 200）不足 14% 且几乎无彩色时视为线稿。
+  async function looksLikeSketch(blob) {
+    const bitmap = await createImageBitmap(blob);
+    try {
+      const w = 96, h = Math.max(1, Math.round(96 * bitmap.height / bitmap.width));
+      const canvas = makeCanvas(w, h), context = canvas.getContext('2d', { willReadFrequently:true });
+      context.fillStyle = '#fff'; context.fillRect(0, 0, w, h);
+      context.drawImage(bitmap, 0, 0, w, h);
+      const data = context.getImageData(0, 0, w, h).data;
+      if (!data.length) return false;
+      let dark = 0, colored = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        if (.299 * r + .587 * g + .114 * b < 200) dark++;
+        if (Math.max(r, g, b) - Math.min(r, g, b) > 40) colored++;
+      }
+      const n = data.length / 4;
+      return dark / n < .14 && colored / n < .05;
+    } finally { bitmap.close(); }
+  }
+
+  // 模块 4：高品质呈现。hero 用源图整图，detail 用裁切放大后的局部；都走 final 两段采样（Qwen 走 1024 通道，云端走编辑接口）。
+  async function generateStudio(options) {
+    const { source, signal, onStatus } = options;
+    const shot = options.shot === 'detail' ? 'detail' : 'hero';
+    const size = options.size;
+    onStatus?.(shot === 'detail' ? '正在裁出特写区域…' : '正在准备棚拍主图…');
+    const image = shot === 'detail' ? (await cropDetail(source, options.selection)).image : source;
+    signal?.throwIfAborted();
+    const fit = async blob => {
+      if (!size) return blob;
+      const got = await sizeOf(blob);
+      return got.width === size.width && got.height === size.height ? blob : fitTo(blob, size.width, size.height);
+    };
+    if (options.provider === 'runninghub' || options.provider === 'imageapi') {
+      const custom = options.provider === 'imageapi', render = custom ? profileRender : cloudRender;
+      onStatus?.(custom ? '正在请求图片接口…' : '正在上传 RunningHub 并排队…');
+      const prompt = cloudPrompt('studio', String(options.prompt || '').trim(), [], false);
+      return fit(await render({ model:options.cloudModel, apiProfile:options.apiProfile, mode:options.mode, resolution:options.resolution,
+        prompt, image, references:[], signal, size }));
+    }
+    const prompt = [String(options.prompt || '').trim(), intents.studio].filter(Boolean).join(' ');
+    const negative = 'lowres, worst quality, low quality, jpeg artifacts, blurry, out of focus, watermark, unwanted text, duplicate objects, clutter, deformed, oversaturated, sketch lines';
+    const shared = { endpoint:options.endpoint, checkpoint:options.checkpoint, prompt, seed:options.seed, slot:options.slot, signal, onStatus };
+    if (/^qwen[_ ]?image[_ ]?2\.?1/i.test(String(options.checkpoint || ''))) {
+      const { blob } = await window.WuyingComfy.renderQwen({ ...shared, negative, sourceImage:image });
+      signal?.throwIfAborted();
+      return fit(blob);
+    }
+    const controlnet = String(options.controlnet || '').trim();
+    if (controlnet && await looksLikeSketch(image)) {
+      // 源图还是线稿：img2img 只会把线描一遍，改为 ControlNet 锁轮廓、从噪声出图，再走 final 第二段精修。
+      onStatus?.('源图是线稿，按轮廓生成棚拍图…');
+      const aligned = await alignedInput(image, true, signal);
+      signal?.throwIfAborted();
+      const { blob } = await window.WuyingComfy.renderLive({ ...shared, input:'sketch', quality:'final', sourceImage:aligned.image,
+        colorGuideImage:aligned.guide, controlnet, strength:.9, latentWidth:960, latentHeight:768, tier:'quality', negative });
+      signal?.throwIfAborted();
+      return fit(await cropResult(blob, aligned.bounds));
+    }
+    const amount = Number.isFinite(options.strength) ? clamp(options.strength, .25, .95) : .4;
+    const [maximum, minimum] = preservation.studio;
+    const strength = maximum - (maximum - minimum) * (amount - .25) / .7;
+    const aligned = await alignedInput(image, false, signal);
+    signal?.throwIfAborted();
+    const { blob } = await window.WuyingComfy.renderLive({ ...shared, input:'image', quality:'final', sourceImage:aligned.image,
+      strength, latentWidth:960, latentHeight:768, tier:'quality', negative });
+    signal?.throwIfAborted();
+    return fit(await cropResult(blob, aligned.bounds));
+  }
+
   // keepRunning=false：新输入立即中止旧请求（旧结果永不显示）。
   // keepRunning=true（Krea/Krita 式实时）：同一时刻只跑一个请求，期间只保留最新一份输入，
   // 跑完后先显示这一帧再接着跑最新输入。帧按提交顺序出现，旧帧不会盖过新帧。
@@ -364,6 +530,8 @@
     }
     if (!Object.hasOwn(intents, kind)) throw new Error('未知的出图操作。');
     if (!isPng(source)) throw new Error('出图需要有效的 PNG 源图。');
+    if (kind === 'scene') return generateScene(options);
+    if (kind === 'studio') return generateStudio(options);
     if (options.provider === 'runninghub' || options.provider === 'imageapi') {
       const regional = kind === 'modify' && !!selection?.length;
       if (regional && !window.WuyingImageSelection.enough(selection)) throw new Error('请选择一块有效区域。');
@@ -476,5 +644,5 @@
     return direction + ' Keep the sketched product as the fixed main subject: preserve its product category, silhouette, proportions, parts and camera angle. Apply this direction only to styling, materials, colors, lighting and scene context; never change the product structure.';
   }
 
-  window.WuyingWorkspaceRender = { generate, cloudPrompt, imagePalette, createLatestPreview, liveSnapshot, themeDirective, influenceMapping };
+  window.WuyingWorkspaceRender = { generate, cloudPrompt, detailBox, looksLikeSketch, imagePalette, createLatestPreview, liveSnapshot, themeDirective, influenceMapping };
 })();

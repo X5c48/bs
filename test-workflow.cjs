@@ -556,3 +556,157 @@ test('草图影响力：render 快照含 influence 并透传出图；旧值回�
   const instantJob = await flow.run(store, { kind:'instant', inputs:[main], ...conn, fidelity:'realistic' });
   assert.equal(instantJob.settings.influence, .8, 'instant 未传时用方案默认 0.8');
 });
+
+test('explore runs one candidate per chosen direction with its own prompt and seed, and replays the same directions', async()=>{
+  const {flow,calls}=load(new Blob(['sketch']));
+  const main=id();
+  const doc={assets:{[main]:{id:main,name:'台灯',width:64,height:48,layers:[{id:id(),blobId:id(),visible:true}]}},blocks:{},jobs:{}};
+  const store=memoryStore(doc,new Map());
+  const job=await flow.run(store,{kind:'explore',inputs:[main],provider:'runninghub',prompt:'desk lamp',directions:['minimal','retro','tech'],quantity:8});
+  assert.equal(job.kind,'explore');
+  assert.equal(calls.length,3);
+  assert.ok(calls.every(call=>call.kind==='render'));
+  assert.deepEqual(job.outputs.map(o=>o.direction),['minimal','retro','tech']);
+  assert.ok(job.outputs.every((o,i)=>o.name.includes(flow.directionPresets[job.settings.directions[i]].label)));
+  assert.equal(new Set(calls.map(c=>c.prompt)).size,3);
+  assert.ok(calls.every(c=>/desk lamp/.test(c.prompt)));
+  assert.match(calls[0].prompt,new RegExp(flow.directionPresets.minimal.prompt.slice(0,20).replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+  assert.equal(new Set(calls.map(c=>c.seed)).size,3);
+  const replay=await flow.run(store,{rerunOf:job.id,provider:'runninghub',directions:['organic','rugged']});
+  assert.deepEqual(replay.settings.directions,['minimal','retro','tech']);
+  assert.deepEqual(calls.slice(3).map(c=>c.prompt),calls.slice(0,3).map(c=>c.prompt));
+});
+
+test('explore refuses fewer than two directions and caps at the limit', async()=>{
+  const {flow}=load(new Blob(['sketch']));
+  const main=id();
+  const doc={assets:{[main]:{id:main,name:'台灯',width:64,height:48,layers:[{id:id(),blobId:id(),visible:true}]}},blocks:{},jobs:{}};
+  await assert.rejects(flow.run(memoryStore(doc,new Map()),{kind:'explore',inputs:[main],provider:'runninghub',directions:['minimal']}),/至少选择两个/);
+  assert.equal(flow.normalizeDirections(['minimal','minimal','bogus','organic']).length,2);
+  assert.ok(flow.normalizeDirections(Object.keys(flow.directionPresets).concat('x')).length<=flow.directionLimit);
+});
+
+test('scene render needs a photo and a sketch, auto-bounds the sketch, and freezes photo + sketch for replay', async()=>{
+  const {flow,calls}=load(new Blob(['composite'],{type:'image/png'}));
+  const main=id(), photo=id();
+  const ink={id:id(),kind:'ink',visible:true,strokes:[{size:10,points:[{x:.4,y:.5},{x:.6,y:.7}]}]};
+  const doc={assets:{[main]:{id:main,name:'客厅',width:1000,height:500,layers:[ink]}},blocks:{},jobs:{}};
+  const store=memoryStore(doc,new Map());
+  await assert.rejects(flow.run(store,{kind:'scene',inputs:[main],endpoint:'e',checkpoint:'c'}),/场景照片/);
+  doc.assets[main].layers=[{id:photo,kind:'image',blobId:id(),visible:true}];
+  await assert.rejects(flow.run(store,{kind:'scene',inputs:[main],endpoint:'e',checkpoint:'c'}),/画出产品草图/);
+  doc.assets[main].layers=[{id:photo,kind:'image',blobId:id(),visible:true},ink];
+  const job=await flow.run(store,{kind:'scene',inputs:[main],endpoint:'e',checkpoint:'c',controlnet:'scribble',prompt:'lamp'});
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].kind,'scene');
+  assert.ok(calls[0].scene.photo && calls[0].scene.sketch);
+  const sx=job.selection.map(p=>p.x),sy=job.selection.map(p=>p.y);
+  assert.ok(Math.min(...sx)<.4-.005 && Math.min(...sy)<.5-.01 && Math.max(...sx)>.6+.005 && Math.max(...sy)>.7+.01,'选区含笔宽与外扩');
+  assert.ok(Math.min(...sx)>.3 && Math.max(...sx)<.7,'选区不应覆盖整张照片');
+  assert.ok(job.selection.length>4,'自动选区为凸包而非矩形');
+  assert.ok(!job.selection.some(p=>p.x>.62&&p.y<.52),'对角线草图的空角不应被选入');
+  assert.equal(job.settings.strength,.85);
+  assert.ok(job.scene.photoBlobId && job.scene.sketchBlobId);
+  assert.ok(store.added.includes(job.scene.photoBlobId) && store.added.includes(job.scene.sketchBlobId));
+  // 照片层被删后，重跑仍用快照
+  doc.assets[main].layers=[];
+  const replay=await flow.run(store,{rerunOf:job.id,endpoint:'e',checkpoint:'c'});
+  assert.deepEqual(replay.selection,job.selection);
+  assert.deepEqual(replay.scene,job.scene);
+  assert.ok(calls[1].scene.photo);
+  // 显式选区优先
+  doc.assets[main].layers=[{id:photo,kind:'image',blobId:id(),visible:true},ink];
+  const lasso=[{x:.1,y:.1},{x:.9,y:.1},{x:.9,y:.9},{x:.1,y:.9}];
+  const picked=await flow.run(store,{kind:'scene',inputs:[main],endpoint:'e',checkpoint:'c',selection:lasso});
+  assert.deepEqual(picked.selection,lasso);
+});
+
+test('sketch bounds reject a too-small sketch', ()=>{
+  const {flow}=load();
+  assert.throws(()=>flow.sketchBounds([{size:1,points:[{x:.5,y:.5}]}],{width:4000,height:4000}),/太小/);
+});
+
+test('studio presentation runs one output per shot with sized targets, material prompt and replay', async()=>{
+  const {flow,calls}=load(new Blob(['render'],{type:'image/png'}));
+  const main=id();
+  const doc={assets:{[main]:{id:main,name:'台灯',width:1000,height:500,layers:[{id:id(),blobId:id(),visible:true}]}},blocks:{},jobs:{}};
+  const store=memoryStore(doc,new Map());
+  const conn={endpoint:'e',checkpoint:'c'};
+  await assert.rejects(flow.run(store,{kind:'studio',inputs:[main],...conn,shots:[]}),/呈现镜头/);
+  const job=await flow.run(store,{kind:'studio',inputs:[main],...conn,material:'aluminum',prompt:'desk lamp'});
+  assert.deepEqual(job.settings.shots,['hero','detail'],'默认主图+特写');
+  assert.equal(calls.length,2);
+  assert.ok(calls.every(c=>c.kind==='studio'));
+  assert.deepEqual(calls.map(c=>c.shot),['hero','detail']);
+  assert.deepEqual({...calls[0].size},{width:1280,height:640},'主图长边 1280 跟随 2:1');
+  assert.deepEqual({...calls[1].size},{width:1280,height:1024},'特写 1280×1024');
+  assert.ok(calls.every(c=>/anodized aluminum/.test(c.prompt)&&/desk lamp/.test(c.prompt)),'提示词含材质描述');
+  assert.match(calls[0].prompt,/hero shot/);
+  assert.match(calls[1].prompt,/Macro close-up/);
+  assert.equal(job.settings.strength,.4);
+  assert.deepEqual(job.outputs.map(o=>o.shot),['hero','detail']);
+  assert.ok(job.outputs[0].name.includes('棚拍主图')&&job.outputs[1].name.includes('材质特写'));
+  const lasso=[{x:.1,y:.1},{x:.3,y:.1},{x:.3,y:.3}];
+  const picked=await flow.run(store,{kind:'studio',inputs:[main],...conn,shots:['detail'],selection:lasso});
+  assert.deepEqual(picked.selection,lasso);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).selection)),lasso);
+  assert.equal(picked.settings.material,'auto');
+  const replay=await flow.run(store,{rerunOf:job.id,...conn,prompt:'changed'});
+  assert.deepEqual([...replay.settings.shots],[...job.settings.shots]);
+  assert.equal(calls.at(-2).prompt,calls[0].prompt,'重跑沿用原提示词');
+  assert.deepEqual({...flow.shotSize('hero',{width:600,height:900})},{width:856,height:1280});
+});
+
+test('studio render: hero uses two-pass final, detail crops selection or centre, Qwen uses its channel', async()=>{
+  const calls=[], drawn=[];
+  const window={WuyingImageSelection:{},WuyingComfy:{
+    renderLive:async o=>{calls.push(['live',o]);return {blob:new Blob(['hd'],{type:'image/png'})};},
+    renderQwen:async o=>{calls.push(['qwen',o]);return {blob:new Blob(['q'],{type:'image/png'})};}}};
+  const context=vm.createContext({window,AbortController,setTimeout,clearTimeout,structuredClone,Blob,
+    createImageBitmap:async()=>({width:1280,height:1024,close(){}}),
+    document:{createElement:()=>({width:0,height:0,getContext:()=>({fillRect(){},drawImage(...a){drawn.push(a);},getImageData:()=>({data:new Uint8ClampedArray()})}),toBlob:cb=>cb(new Blob(['x'],{type:'image/png'}))})}});
+  vm.runInContext(fs.readFileSync(__dirname+'/dist/workspace-render.js','utf8'),context);
+  const {generate,detailBox}=window.WuyingWorkspaceRender;
+  const png=new Blob(['s'],{type:'image/png'});
+  const base={kind:'studio',provider:'comfy',source:png,endpoint:'e',checkpoint:'v1-5.safetensors',prompt:'lamp',strength:.4};
+  await generate({...base,shot:'hero',size:{width:1280,height:1024}});
+  assert.equal(calls[0][0],'live');
+  assert.equal(calls[0][1].quality,'final');
+  assert.equal(calls[0][1].input,'image');
+  assert.equal(calls[0][1].sourceImage,png,'主图用整张源图');
+  assert.match(calls[0][1].prompt,/^lamp .*studio product photography/);
+  assert.ok(calls[0][1].strength>.7,'保形为主');
+  drawn.length=0;
+  await generate({...base,shot:'detail'});
+  assert.notEqual(calls[1][1].sourceImage,png,'特写用裁切图');
+  const centre=detailBox(1000,800);
+  assert.deepEqual({...centre},{x:250,y:200,width:500,height:400});
+  const sel=detailBox(1000,800,[{x:.1,y:.1},{x:.2,y:.1},{x:.2,y:.2}]);
+  assert.ok(Math.abs(sel.width/sel.height-1.25)<.01);
+  assert.ok(sel.x<=100&&sel.y<=80&&sel.x+sel.width>=200&&sel.y+sel.height>=160,'选区被框住');
+  assert.ok(sel.width<500,'选区特写比中心更近');
+  const edge=detailBox(1000,800,[{x:.9,y:.9},{x:1,y:.9},{x:1,y:1}]);
+  assert.ok(edge.x+edge.width<=1000.01&&edge.y+edge.height<=800.01,'取景框不出界');
+  await generate({...base,shot:'hero',checkpoint:'qwen_image_2.1_turbo.safetensors'});
+  assert.equal(calls.at(-1)[0],'qwen');
+});
+
+test('studio render: a line-art source goes through ControlNet sketch path instead of img2img', async()=>{
+  const calls=[];
+  const white=new Uint8ClampedArray(96*72*4).fill(255);
+  for(let i=0;i<300;i++) white.fill(0,i*4*20,i*4*20+3);
+  const window={WuyingImageSelection:{},WuyingComfy:{renderLive:async o=>{calls.push(o);return {blob:new Blob(['hd'],{type:'image/png'})};}}};
+  const context=vm.createContext({window,AbortController,setTimeout,clearTimeout,structuredClone,Blob,
+    createImageBitmap:async()=>({width:1280,height:960,close(){}}),
+    document:{createElement:()=>({width:0,height:0,getContext:()=>({fillRect(){},drawImage(){},putImageData(){},getImageData:()=>({data:white})}),toBlob:cb=>cb(new Blob(['x'],{type:'image/png'}))})}});
+  vm.runInContext(fs.readFileSync(__dirname+'/dist/workspace-render.js','utf8'),context);
+  const {generate,looksLikeSketch}=window.WuyingWorkspaceRender;
+  const png=new Blob(['s'],{type:'image/png'});
+  assert.equal(await looksLikeSketch(png),true);
+  await generate({kind:'studio',shot:'hero',provider:'comfy',source:png,endpoint:'e',checkpoint:'v1-5.safetensors',controlnet:'scribble.safetensors',prompt:'lamp'});
+  assert.equal(calls[0].input,'sketch');
+  assert.equal(calls[0].quality,'final');
+  assert.equal(calls[0].controlnet,'scribble.safetensors');
+  await generate({kind:'studio',shot:'hero',provider:'comfy',source:png,endpoint:'e',checkpoint:'v1-5.safetensors',prompt:'lamp'});
+  assert.equal(calls[1].input,'image','没有 ControlNet 时回退 img2img');
+});

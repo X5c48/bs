@@ -68,6 +68,8 @@
     exportFile.hidden = !project;
     nameInput.required = Boolean(project);
     nameInput.value = project?.name || '';
+    // 产品方向只在新建时填写，随画布进入造型流程。
+    document.getElementById('brief-fields').hidden = !!project;
     formError.hidden = true;
     dialog.showModal();
     nameInput.select();
@@ -306,7 +308,11 @@
     try {
       if (!editing) {
         const project = await store.create(name || '未命名文件');
-        window.location.assign(fileLink(project.id));
+        // 产品方向通过地址一次性带给工作台，由第一张画布继承。
+        const category = document.getElementById('brief-category').value.trim();
+        const text = document.getElementById('brief-text').value.trim();
+        const brief = (category || text) ? '&brief=' + encodeURIComponent(JSON.stringify({ category, text })) : '';
+        window.location.assign(fileLink(project.id) + brief);
         return;
       }
       if (!await store.rename(editing.id, name)) throw new Error('这个文件已不存在。');

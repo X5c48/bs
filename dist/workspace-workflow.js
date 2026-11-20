@@ -3,7 +3,53 @@
 
   const uid=()=>crypto.randomUUID();
   const prefsKey='wuying-workspace-model-v1';
-  const names={instant:'快速渲染',render:'提示渲染',modify:'修改',color:'配色',form:'造型',view:'新视角',cutout:'去除背景',upscale:'放大 2×',outpaint:'扩展画布'};
+  const names={instant:'快速渲染',render:'提示渲染',explore:'方案发散',scene:'情境渲染',studio:'高品质呈现',modify:'修改',color:'配色',form:'造型',view:'新视角',cutout:'去除背景',upscale:'放大 2×',outpaint:'扩展画布'};
+  // 跟随草图线条出图的操作：都走草图影响力口径与 ControlNet 控形。
+  const sketchKinds=['instant','render','explore'];
+  // 方案发散（对标 Vizcom 的多方案并排）：同一张草图按不同设计方向各出一张，轮廓由 ControlNet 锁定。
+  const directionPresets={
+    minimal:{label:'极简几何',prompt:'Minimal geometric design language: flat planes, crisp edges, matte white and light grey, restrained detailing.'},
+    organic:{label:'有机流线',prompt:'Organic streamlined design language: soft continuous surfaces, smooth transitions, satin finish in warm sand tones.'},
+    rugged:{label:'硬朗工业',prompt:'Rugged industrial design language: chamfered edges, visible fasteners, dark anodized metal with rubberized accents.'},
+    retro:{label:'温润复古',prompt:'Warm retro design language: rounded forms, walnut wood and brushed brass, cream enamel paint.'},
+    tech:{label:'科技未来',prompt:'Futuristic tech design language: glossy black glass, thin light strips, precise seams, cool blue accent light.'},
+    playful:{label:'亲和活泼',prompt:'Playful friendly design language: chunky soft forms, saturated coral and teal colors, glossy plastic.'}
+  };
+  const directionLimit=6;
+  // 模块 4：高品质呈现。hero=棚拍主图（长边 1280，跟随源图比例），detail=材质特写（1280×1024，选区或中心裁切后重采样）。
+  const shotPresets={
+    hero:{label:'棚拍主图',prompt:'Studio product hero shot of the same product on a seamless light grey backdrop. Large softbox key light, subtle rim light, soft contact shadow, crisp focus, high-end commercial product photography. Preserve the exact silhouette, proportions, parts, colors and camera angle.'},
+    detail:{label:'材质特写',prompt:'Macro close-up product photograph of this part of the product. Fine surface texture, precise seams, chamfers and edges, shallow depth of field, soft studio lighting. Keep the same shapes, layout and colors as the crop.'}
+  };
+  const materialPresets={
+    auto:{label:'沿用现有材质',prompt:'the existing materials and finishes, rendered with realistic surface texture'},
+    plastic:{label:'哑光塑料',prompt:'matte injection-molded plastic with a fine sandblasted texture'},
+    aluminum:{label:'阳极氧化铝',prompt:'bead-blasted anodized aluminum with soft specular highlights'},
+    steel:{label:'拉丝不锈钢',prompt:'brushed stainless steel with fine directional grain'},
+    wood:{label:'胡桃木',prompt:'oiled walnut wood with visible natural grain'},
+    ceramic:{label:'釉面陶瓷',prompt:'glazed ceramic with a smooth glossy surface'},
+    fabric:{label:'针织织物',prompt:'woven knit fabric with visible threads'},
+    leather:{label:'皮革',prompt:'fine-grain leather with stitched edges'}
+  };
+  function normalizeShots(value) {
+    if(!Array.isArray(value)) return [];
+    return [...new Set(value.filter(key=>typeof key==='string'&&Object.hasOwn(shotPresets,key)))];
+  }
+  // 主图长边 1280、跟随源图比例并 8 对齐；特写固定 1280×1024。
+  function shotSize(shot,source) {
+    if(shot==='detail') return {width:1280,height:1024};
+    const w=Number(source?.width)||1280,h=Number(source?.height)||1024,long=1280;
+    const r=w/h,align=v=>Math.max(64,Math.round(v/8)*8);
+    return r>=1?{width:long,height:align(long/r)}:{width:align(long*r),height:long};
+  }
+  function studioPrompt(shot,material,text) {
+    const surface=(materialPresets[material]||materialPresets.auto).prompt;
+    return [text,shotPresets[shot].prompt,'Materials: '+surface+'.'].filter(Boolean).join(' ').slice(0,5000);
+  }
+  function normalizeDirections(value) {
+    if(!Array.isArray(value)) return [];
+    return [...new Set(value.filter(key=>typeof key==='string'&&Object.hasOwn(directionPresets,key)))].slice(0,directionLimit);
+  }
   const isImageTool=kind=>kind==='cutout'||kind==='upscale';
   const fidelityStages={
     line:{label:'整理线稿',prompt:'Clean product line art with even, precise strokes on plain white paper. No color fills, shading or material texture.'},
@@ -142,7 +188,7 @@
   }
   // 生成前的说明（借鉴 Toonflow「花钱的生成先说清要生成什么、生成几张」）。
   function runSummary(block,primary,p=modelPrefs()) {
-    const b=migrateBlock(block), count=(b.kind==='view'&&normalizeViews(b.views).length)||quantityFor(b.kind,b.quantity);
+    const b=migrateBlock(block), count=(b.kind==='view'&&normalizeViews(b.views).length)||(b.kind==='explore'&&normalizeDirections(b.directions).length)||quantityFor(b.kind,b.quantity);
     let size=null;
     try{if(primary) size=outputSize(primary,b);}catch{}
     if(isImageTool(b.kind)){
@@ -213,7 +259,35 @@
     const b=migrateBlock(block);
     return {kind:b.kind,blockId:b.id,inputs:[...b.inputs],roles:{...(b.roles||{})},prompt:b.prompt||'',
       quantity:b.quantity,strength:b.strength,...(b.influence!==undefined?{influence:b.influence}:{}),aspect:b.aspect,customW:b.customW,customH:b.customH,
-      mode:b.mode,resolution:b.resolution,style:b.style,fidelity:b.fidelity,stageStyle:b.stageStyle,form:b.form,palette:b.palette,views:b.views};
+      mode:b.mode,resolution:b.resolution,style:b.style,fidelity:b.fidelity,stageStyle:b.stageStyle,form:b.form,palette:b.palette,views:b.views,directions:b.directions};
+  }
+
+  // 模块 5：未圈选时按草图自动定区：笔触点外扩（笔宽一半 + 草图尺寸 10%，至少 3%）后取凸包，
+  // 比矩形包围盒少重绘大块背景，减少墙线、桌沿在选区边上错位。坐标按像素算，避免非方形画布变形。
+  function sketchBounds(strokes,asset){
+    const w=Number(asset.width)||1024,h=Number(asset.height)||768;
+    const points=strokes.flatMap(stroke=>stroke.points.map(p=>({x:p.x*w,y:p.y*h,half:(Number(stroke.size)||4)/2})));
+    const xs=points.map(p=>p.x),ys=points.map(p=>p.y);
+    const spanX=Math.max(...xs)-Math.min(...xs),spanY=Math.max(...ys)-Math.min(...ys);
+    if(spanX<w*.015&&spanY<h*.015) throw new Error('草图范围太小，请画大一些，或用套索圈出产品区域。');
+    const grow=Math.max(Math.min(w,h)*.03,Math.max(spanX,spanY)*.1);
+    const cloud=[];
+    for(const p of points) for(let k=0;k<12;k++){
+      const angle=k*Math.PI/6,r=grow+p.half;
+      cloud.push([Math.min(w,Math.max(0,p.x+Math.cos(angle)*r)),Math.min(h,Math.max(0,p.y+Math.sin(angle)*r))]);
+    }
+    cloud.sort((p,q)=>p[0]-q[0]||p[1]-q[1]);
+    const cross=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
+    const half=list=>{const out=[];for(const p of list){while(out.length>=2&&cross(out.at(-2),out.at(-1),p)<=0)out.pop();out.push(p);}out.pop();return out;};
+    const hull=[...half(cloud),...half(cloud.slice().reverse())];
+    const round=v=>Math.round(v*1e4)/1e4;
+    return hull.map(([x,y])=>({x:round(x/w),y:round(y/h)}));
+  }
+  function sceneParts(asset){
+    const visible=(asset.layers||[]).filter(layer=>layer.visible!==false&&(layer.opacity??1)>0);
+    const photos=visible.filter(layer=>layer.kind==='image'&&layer.blobId);
+    const strokes=visible.filter(layer=>layer.kind==='ink').flatMap(layer=>layer.strokes||[]).filter(stroke=>!stroke.erase&&stroke.points?.length);
+    return {photos,strokes};
   }
 
   function normalizeSelection(points) {
@@ -284,7 +358,7 @@
       inputs=options.inputs;
     }
     const sourceId=prior?prior.sourceId:inputs?inputs.at(-1):options.sourceId;
-    const fixedInstructions=prior?.settings?.form||prior?.settings?.palette||prior?.settings?.views?.length;
+    const fixedInstructions=prior?.settings?.form||prior?.settings?.palette||prior?.settings?.views?.length||prior?.settings?.directions?.length||prior?.settings?.shots?.length;
     const prompt=String((fixedInstructions?prior.prompt:options.prompt??prior?.prompt)||'').trim().slice(0,5000);
     const asset=doc.assets[sourceId];
     if(!asset) throw new Error('请先连接一张源图。');
@@ -297,7 +371,16 @@
     if(!prior&&!partRegion&&asset.draft?.parts.some(part=>part.locked)&&(kind==='modify'||kind==='form')){
       throw new Error('该草稿有锁定部件，请进入部件编辑器选择要改的部件。');
     }
-    const selection=kind==='modify'?normalizeSelection(prior?prior.selection:partRegion?.points||options.selection):[];
+    const scene=kind==='scene', studio=kind==='studio';
+    let sceneSelection=[];
+    if(scene&&!prior){
+      const {photos,strokes}=sceneParts(asset);
+      if(!photos.length) throw new Error('情境渲染需要先上传一张场景照片。');
+      if(!strokes.length) throw new Error('请先在照片上画出产品草图，再做情境渲染。');
+      sceneSelection=options.selection?.length?normalizeSelection(options.selection):sketchBounds(strokes,asset);
+    }
+    if(scene&&prior&&!prior.scene) throw new Error('这批情境渲染缺少照片快照，无法按原输入重跑。');
+    const selection=kind==='modify'?normalizeSelection(prior?prior.selection:partRegion?.points||options.selection):scene?(prior?prior.selection:sceneSelection):studio?normalizeSelection(prior?prior.selection:options.selection):[];
     const protectedAreas=prior?.protectedAreas||partRegion?.protectedAreas||[];
     const partSource=prior?.partSource||(partRegion?{
       id:options.partId,name:asset.draft.parts.find(part=>part.id===options.partId).name,revision:asset.draft.revision
@@ -324,10 +407,10 @@
     const instant=kind==='instant';
     const fidelity=pick('fidelity',fidelityOptions.map(([key])=>key),'auto');
     const targetFidelity=instant?resolveFidelity(doc,asset,prior?.settings?.targetFidelity||fidelity):undefined;
-    const aspect=instant||imageTool?'original':pick('aspect',['original','custom',...Object.keys(aspects)],'original');
+    const aspect=instant||imageTool||scene||studio?'original':pick('aspect',['original','custom',...Object.keys(aspects)],'original');
     const customW=Number(options.customW??priorSettings.customW)||4, customH=Number(options.customH??priorSettings.customH)||3;
     const mode=instant?'standard':pick('mode',['standard','pro'],'standard');
-    const resolution=instant||imageTool?'match':pick('resolution',['match','1k','2k','4k'],'match');
+    const resolution=instant||imageTool||scene||studio?'match':pick('resolution',['match','1k','2k','4k'],'match');
     let size=outputSize(asset,{kind,aspect,customW,customH,resolution});
     const expanding=kind==='outpaint';
     const outpaint=expanding?(prior?.settings?.outpaint||outpaintFrame(asset,options.outpaint)):undefined;
@@ -339,7 +422,12 @@
     const palette=kind==='color'?normalizePalette(prior?priorSettings.palette:options.palette):[];
     const direction=variationPrompt(form,palette);
     const views=kind==='view'?normalizeViews(prior?priorSettings.views:options.views):[];
-    if(!imageTool&&!expanding&&!prompt&&!direction&&!views.length&&!instant&&kind!=='render'&&!(kind==='color'&&colorRef)){
+    const directions=kind==='explore'?normalizeDirections(prior?priorSettings.directions:options.directions):[];
+    if(kind==='explore'&&directions.length<2) throw new Error('方案发散至少选择两个设计方向。');
+    const shots=studio?normalizeShots(prior?priorSettings.shots:options.shots??['hero','detail']):[];
+    if(studio&&!shots.length) throw new Error('请至少选择一种呈现镜头：棚拍主图或材质特写。');
+    const material=studio?(Object.hasOwn(materialPresets,prior?priorSettings.material:options.material)?(prior?priorSettings.material:options.material):'auto'):undefined;
+    if(!imageTool&&!expanding&&!prompt&&!direction&&!views.length&&!sketchKinds.includes(kind)&&!scene&&!studio&&!(kind==='color'&&colorRef)){
       if(kind==='view') throw new Error('请选择视角，或描述想要的角度。');
       throw new Error(kind==='form'?'请选择造型方向，或补充想要的变化。':kind==='color'?'请添加目标色、配色参考或文字说明。':'请描述你想改的内容。');
     }
@@ -357,6 +445,11 @@
       ? requestedStageStyle : 'none';
     const instructions=instant?composePrompt(fidelityStages[targetFidelity].prompt,stageStyle):composePrompt([direction,prompt].filter(Boolean).join('\n'),style);
     const renderPrompt=priorSettings.renderPrompt||instructions;
+    const directionPrompts=Object.fromEntries(directions.map(key=>[
+      key,priorSettings.directionPrompts?.[key]||[directionPresets[key].prompt,renderPrompt].filter(Boolean).join(' ').slice(0,5000)
+    ]));
+    const shotPrompts=Object.fromEntries(shots.map(shot=>[shot,priorSettings.shotPrompts?.[shot]||studioPrompt(shot,material,prompt)]));
+    const shotSizes=Object.fromEntries(shots.map(shot=>[shot,priorSettings.shotSizes?.[shot]||shotSize(shot,asset)]));
     const viewPrompts=Object.fromEntries(views.map(view=>[
       view,priorSettings.viewPrompts?.[view]||('Target camera angle: '+viewPresets[view].prompt+' '+renderPrompt).trim().slice(0,5000)
     ]));
@@ -370,22 +463,27 @@
     const strengthValue=views.length&&prior?priorSettings.strength:options.strength??priorSettings.strength;
     let strength=distance
       ? priorSettings.strength??(.35+.60*distance)
-      : Math.min(.95,Math.max(.25,Number(strengthValue)||.65));
+      : Math.min(.95,Math.max(.25,Number(strengthValue)||(scene?.85:studio?.4:.65)));
     // 草图影响力（方案 §7.3）：render/instant 走 0–1.5 口径，旧项目回退 block.strength；其余 kind 保持调整幅度语义。
-    const influenceKind=kind==='render'||kind==='instant';
+    const influenceKind=sketchKinds.includes(kind);
     const rawInfluence=influenceKind?options.influence??priorSettings.influence??options.strength??priorSettings.strength:undefined;
     const influence=influenceKind?(Number.isFinite(Number(rawInfluence))?Math.min(1.5,Math.max(0,Number(rawInfluence))):.8):undefined;
     if(influenceKind) strength=Math.min(1,influence);
-    const quantity=imageTool||expanding?1:views.length||quantityFor(kind,options.quantity??priorSettings.quantity);
+    const quantity=imageTool||expanding?1:views.length||directions.length||shots.length||quantityFor(kind,options.quantity??priorSettings.quantity);
     const seed=Number.isSafeInteger(options.seed)&&options.seed>=0&&options.seed<=0xffffffff
       ? options.seed : crypto.getRandomValues(new Uint32Array(1))[0];
     const now=Date.now();
     const id=uid(), inputBlobId=uid();
-    let source, references;
+    let source, references, sceneImages;
+    const sceneIds=scene?(prior?.scene||{photoBlobId:uid(),sketchBlobId:uid()}):null;
     if(prior){
       // 重跑沿用旧快照的 blob，不复制图片。
       source=await store.getBlob(prior.inputBlobId);
       if(!source) throw new Error('输入快照已丢失，无法按原输入重跑。');
+      if(scene){
+        sceneImages={photo:await store.getBlob(sceneIds.photoBlobId),sketch:await store.getBlob(sceneIds.sketchBlobId)};
+        if(!sceneImages.photo||!sceneImages.sketch) throw new Error('照片或草图快照已丢失，无法按原输入重跑。');
+      }
       references=await Promise.all(priorRefs.map(async({id,role,blobId})=>{
         const blob=await store.getBlob(blobId);
         if(!blob) throw new Error('参考图快照已丢失，无法按原输入重跑。');
@@ -393,6 +491,14 @@
       }));
     }else{
       source=await window.WuyingWorkspaceComposite.toPng(asset,store);
+      if(scene){
+        // 照片底图（不含笔触）作为重绘底与合成底；草图单独成图作为 ControlNet 控形。
+        const only=keep=>({...asset,draft:undefined,transparent:false,layers:(asset.layers||[]).filter(keep)});
+        sceneImages={
+          photo:await window.WuyingWorkspaceComposite.toPng(only(layer=>layer.kind!=='ink'),store),
+          sketch:await window.WuyingWorkspaceComposite.toPng(only(layer=>layer.kind==='ink'),store)
+        };
+      }
       references=await Promise.all(refs.map(async({id,role})=>({
         id,role,blobId:uid(),blob:await window.WuyingWorkspaceComposite.toPng(doc.assets[id],store)
       })));
@@ -402,7 +508,7 @@
       size={width:bitmap.width,height:bitmap.height};
       bitmap.close();
     }
-    if(prior&&(partSource||imageTool||form||palette.length||views.length)&&priorSettings.width>0&&priorSettings.height>0){
+    if(prior&&(partSource||imageTool||scene||form||palette.length||views.length||directions.length||shots.length)&&priorSettings.width>0&&priorSettings.height>0){
       size={width:priorSettings.width,height:priorSettings.height};
     }
     signal?.throwIfAborted();
@@ -416,15 +522,19 @@
         ...(influenceKind?{influence}:{})}};
     if(outpaint)job.settings.outpaint=outpaint;
     if(partSource) Object.assign(job,{partSource,protectedAreas});
+    if(scene) job.scene=sceneIds;
     if(asset.draft||prior?.draftRevision) job.draftRevision=prior?.draftRevision||asset.draft.revision;
     if(instant) Object.assign(job.settings,{fidelity,targetFidelity,stageStyle,renderPrompt});
     if(form) Object.assign(job.settings,{form,renderPrompt});
     if(palette.length) Object.assign(job.settings,{palette,renderPrompt});
     if(views.length) Object.assign(job.settings,{views,viewPrompts});
+    if(directions.length) Object.assign(job.settings,{directions,directionPrompts,renderPrompt});
+    if(studio) Object.assign(job.settings,{shots,material,shotPrompts,shotSizes});
     const transparent=kind==='cutout'||(kind==='upscale'&&(prior?priorSettings.transparent:window.WuyingWorkspaceComposite.isTransparent?.(asset)));
     if(transparent) job.settings.transparent=true;
     if(!prior) delete job.rerunOf;
-    const frozen=prior?[]:[{id:inputBlobId,blob:source},...references.map(({blobId,blob})=>({id:blobId,blob}))];
+    const frozen=prior?[]:[{id:inputBlobId,blob:source},...references.map(({blobId,blob})=>({id:blobId,blob})),
+      ...(scene?[{id:sceneIds.photoBlobId,blob:sceneImages.photo},{id:sceneIds.sketchBlobId,blob:sceneImages.sketch}]:[])];
     await store.change(current=>{
       if(!current.assets[sourceId]||(blockId&&!current.blocks[blockId])) throw new Error('生成来源已被移除。');
       current.jobs[id]=job;
@@ -432,7 +542,8 @@
     try{
       for(let i=0;i<quantity;i++){
         signal?.throwIfAborted();
-        const view=views[i], label=view?viewPresets[view].label:'';
+        const view=views[i], heading=directions[i], shot=shots[i];
+        const label=view?viewPresets[view].label:heading?directionPresets[heading].label:shot?shotPresets[shot].label:'';
         const progress=(i+1)+'/'+quantity+(label?' · '+label:'');
         onStatus('生成 '+progress+'…',{jobId:id,count:i});
         const slot='workspace-'+id+'-'+i;
@@ -440,15 +551,15 @@
         const blob=imageTool
           ? (await window.WuyingComfy.runImageTool({kind,endpoint,sourceImage:source,size,slot,signal,onStatus:onProgress})).blob
           : await window.WuyingWorkspaceRender.generate({
-          kind,source,selection,protectedAreas,outpaint,prompt:view?viewPrompts[view]:renderPrompt,references,provider,cloudModel,apiProfile,endpoint,checkpoint,controlnet,strength,
-          ...(influenceKind?{influence}:{}),
-          size,mode,resolution:cloudResolution(size,resolution),
+          kind:kind==='explore'?'render':kind,source,selection,protectedAreas,outpaint,prompt:view?viewPrompts[view]:heading?directionPrompts[heading]:shot?shotPrompts[shot]:renderPrompt,references,provider,cloudModel,apiProfile,endpoint,checkpoint,controlnet,strength,
+          ...(influenceKind?{influence}:{}),...(scene?{scene:sceneImages}:{}),...(shot?{shot}:{}),
+          size:shot?shotSizes[shot]:size,mode,resolution:cloudResolution(size,resolution),
           seed:(seed+i)>>>0,slot,signal,onStatus:onProgress
         });
         signal?.throwIfAborted();
         const bitmap=await createImageBitmap(blob);
         const output={id:uid(),blobId:uid(),name:partSource?'部件精修 · '+partSource.name:(instant?fidelityStages[targetFidelity].label:names[kind])+(label?' · '+label:' '+(i+1)),
-          width:bitmap.width,height:bitmap.height,...(view?{view}:{}),...(transparent?{transparent:true}:{})};
+          width:bitmap.width,height:bitmap.height,...(view?{view}:{}),...(heading?{direction:heading}:{}),...(shot?{shot}:{}),...(transparent?{transparent:true}:{})};
         bitmap.close();
         await store.change(current=>{
           current.jobs[id].outputs.push(output);
@@ -469,5 +580,5 @@
   }
   window.WuyingWorkflow={run,promoteOutput,modelPrefs,saveModel,checkModel,checkCloud,providerLabel,ready,cloudModels,names,
     migrateBlock,blockRequest,outputSize,aspects,blockDefaults,stylePresets,composePrompt,resolveCloudModel,runSummary,cloudNames,
-    fidelityStages,fidelityOptions,resolveFidelity,formPresets,normalizeForm,normalizePalette,quantityOptions,viewPresets,viewBatchLimit,normalizeViews,isImageTool,imageToolEndpoint};
+    fidelityStages,fidelityOptions,resolveFidelity,formPresets,directionPresets,normalizeDirections,directionLimit,shotPresets,materialPresets,normalizeShots,shotSize,sketchKinds,sketchBounds,normalizeForm,normalizePalette,quantityOptions,viewPresets,viewBatchLimit,normalizeViews,isImageTool,imageToolEndpoint};
 })();

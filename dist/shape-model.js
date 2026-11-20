@@ -3,9 +3,10 @@
   else root.WuyingShapeModel=factory(root.WuyingSketchRules);
 })(globalThis,function(rules){
   'use strict';
-  const labels={x:'中心 X',y:'中心 Y',width:'宽度',height:'高度',angle:'角度',name:'名称',shape:'轮廓'};
+  const labels={x:'中心 X',y:'中心 Y',width:'宽度',height:'高度',depth:'厚度',z:'深度位置',angle:'角度',name:'名称',shape:'轮廓'};
   const shapeNames={rectangle:'矩形',ellipse:'椭圆',polygon:'描线'};
   const fields=['x','y','width','height','angle'];
+  const spatialFields=[...fields,'depth','z'];
   const rect=[{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}];
   const oval=Array.from({length:40},(_,i)=>{
     const t=i/40*Math.PI*2;
@@ -26,7 +27,9 @@
 
   function validate(part,size){
     if(!fields.every(key=>Number.isFinite(part[key]))) throw new Error('请填写有效的部件参数。');
+    if(!Number.isFinite(part.depth)||!Number.isFinite(part.z)) throw new Error('请填写有效的部件厚度与深度位置。');
     if(part.width<8||part.height<8) throw new Error('部件宽高至少为 8 像素。');
+    if(part.depth<4) throw new Error('部件厚度至少为 4 像素。');
     if(Math.abs(part.angle)>180) throw new Error('角度应在 -180° 至 180° 之间。');
     if(polygon(part).some(({x,y})=>x<-.001||y<-.001||x>size.width+.001||y>size.height+.001)){
       throw new Error('轮廓超出画布，请缩小、移动或调整角度。');
@@ -34,12 +37,16 @@
     return part;
   }
 
+  const defaultDepth=values=>Math.max(4,round(Math.min(values.width||40,values.height||40)*0.6));
+
   function createPart(id,shape,name,values,size){
     if(!Object.hasOwn(shapeNames,shape)) throw new Error('未知部件轮廓。');
     const title=String(name||'').trim().slice(0,60);
     if(!title) throw new Error('请填写部件名称。');
     const part={id,shape,name:title,locked:values.locked===true};
     for(const key of fields) part[key]=round(values[key]);
+    part.depth=Number.isFinite(values.depth)?round(values.depth):defaultDepth(values);
+    part.z=Number.isFinite(values.z)?round(values.z):0;
     if(shape==='polygon') part.points=clone(values.points);
     return validate(part,size);
   }
@@ -74,6 +81,7 @@
     if(lockOnly) next.locked=patch.locked;
     else{
       for(const key of fields) if(Object.hasOwn(patch,key)) next[key]=round(patch[key]);
+      for(const key of ['depth','z']) if(Object.hasOwn(patch,key)) next[key]=round(patch[key]);
       if(Object.hasOwn(patch,'name')){
         next.name=String(patch.name||'').trim().slice(0,60);
         if(!next.name) throw new Error('请填写部件名称。');
@@ -91,8 +99,8 @@
   function variants(parts,id,key,amount,size){
     const part=find(parts,id);
     if(part.locked) throw new Error('该部件已锁定，请选择可改的部件。');
-    if(!['width','height','angle'].includes(key)||!Number.isFinite(amount)||amount<5||amount>40){
-      throw new Error('请选择宽度、高度或角度，幅度应在 5 至 40 之间。');
+    if(!['width','height','angle','depth'].includes(key)||!Number.isFinite(amount)||amount<5||amount>40){
+      throw new Error('请选择宽度、高度、角度或厚度，幅度应在 5 至 40 之间。');
     }
     const result=[], seen=new Set([part[key]]);
     for(const weight of [-1,.5,1]){
@@ -119,7 +127,7 @@
         changes.push({id:part.id,name:part.name,type:'added',fields:[]});
         continue;
       }
-      const changed=[...fields,'name','shape'].filter(key=>before[key]!==part[key])
+      const changed=[...spatialFields,'name','shape'].filter(key=>before[key]!==part[key])
         .map(key=>({key,label:labels[key],before:before[key],after:part[key]}));
       if(changed.length) changes.push({id:part.id,name:part.name,type:'changed',fields:changed});
     }
@@ -138,6 +146,92 @@
     return {parentId:asset.id,parentName:asset.name,revision:asset.draft.revision,parts:clone(asset.draft.parts)};
   }
 
-  return {labels,shapeNames,caption,polygon,createPart,tracePart,updatePart,removePart,variants,diff,editRegion,snapshot};
+  /* ── 深度维度：迁移、三视图推导、体块投影（融合自 11-04 结构空间原型） ── */
+
+  // 旧草稿部件缺 depth/z 时返回 true（读取处据此一次性迁移落盘）
+  function needsNormalize(parts){
+    return Array.isArray(parts)&&parts.some(part=>!Number.isFinite(part?.depth)||!Number.isFinite(part?.z));
+  }
+  function normalizeParts(parts){
+    return (parts||[]).map(part=>{
+      if(Number.isFinite(part.depth)&&Number.isFinite(part.z)) return part;
+      const next={...part};
+      if(!Number.isFinite(next.depth)) next.depth=defaultDepth(next);
+      if(!Number.isFinite(next.z)) next.z=0;
+      next.depth=round(next.depth);
+      return next;
+    });
+  }
+
+  // 侧视投影：横轴=深度，竖轴=高度（轮廓沿深度挤出，侧面看是 depth × 高度的矩形）
+  function sideRect(part){
+    return {x:part.z-part.depth/2,y:part.y-part.height/2,width:part.depth,height:part.height};
+  }
+  // 俯视投影：横轴=宽度，纵轴=深度
+  function topRect(part){
+    return {x:part.x-part.width/2,y:part.z-part.depth/2,width:part.width,height:part.depth};
+  }
+  // 所有部件占用的深度区间（三视图格宽与对齐用）
+  function depthSpan(parts){
+    if(!parts.length) return {min:0,max:0};
+    let min=Infinity,max=-Infinity;
+    for(const part of parts){
+      min=Math.min(min,part.z-part.depth/2);
+      max=Math.max(max,part.z+part.depth/2);
+    }
+    return {min,max};
+  }
+
+  // 体块投影：部件包围盒长方体，绕竖直轴转 az、俯仰 el，返回可见面（远→近排序）
+  // 光照固定在左上前方，shade∈[0.3,1]，页面负责配色
+  function blockFaces(part,az=0.5,el=0.42){
+    const hw=part.width/2,hh=part.height/2,hd=Math.max(4,part.depth)/2;
+    const corner=(dx,dy,dz)=>({x:part.x+dx*hw,y:part.y+dy*hh,z:part.z+dz*hd});
+    const ca=Math.cos(az),sa=Math.sin(az),ce=Math.cos(el),se=Math.sin(el);
+    const project=p=>{
+      const x1=p.x*ca-p.z*sa,z1=p.x*sa+p.z*ca;
+      return {x:x1,y:p.y*ce-z1*se,d:p.y*se+z1*ce};
+    };
+    const face=(id,normal,corners)=>({
+      id,
+      depth:corners.reduce((sum,p)=>sum+project(p).d,0)/4,
+      points:corners.map(project),
+      // 法线与光照都只做旋转（无平移）
+      normal:(()=>{
+        const nx=normal[0]*ca-normal[2]*sa,nz1=normal[0]*sa+normal[2]*ca;
+        return {x:nx,y:normal[1]*ce-nz1*se,z:normal[1]*se+nz1*ce};
+      })()
+    });
+    const faces=[
+      face('top',[0,-1,0],[corner(-1,-1,-1),corner(1,-1,-1),corner(1,-1,1),corner(-1,-1,1)]),
+      face('bottom',[0,1,0],[corner(-1,1,-1),corner(1,1,-1),corner(1,1,1),corner(-1,1,1)]),
+      face('front',[0,0,-1],[corner(-1,-1,-1),corner(1,-1,-1),corner(1,1,-1),corner(-1,1,-1)]),
+      face('back',[0,0,1],[corner(-1,-1,1),corner(1,-1,1),corner(1,1,1),corner(-1,1,1)]),
+      face('left',[-1,0,0],[corner(-1,-1,-1),corner(-1,1,-1),corner(-1,1,1),corner(-1,-1,1)]),
+      face('right',[1,0,0],[corner(1,-1,-1),corner(1,1,-1),corner(1,1,1),corner(1,-1,1)])
+    ];
+    // 光照方向（世界系）：左上前方；旋转到观察系与可见性共用同一套旋转
+    const light={x:-0.45,y:-0.72,z:-0.53};
+    const rotate=v=>{
+      const nx=v.x*ca-v.z*sa,nz1=v.x*sa+v.z*ca;
+      return {x:nx,y:v.y*ce-nz1*se,z:v.y*se+nz1*ce};
+    };
+    const lit=rotate(light);
+    return faces
+      .filter(f=>f.normal.z<0) // 法线朝向相机（观察系 z 分量为负）才可见
+      .map(f=>{
+        const shade=Math.min(1,Math.max(0.3,0.45+0.55*Math.max(0,f.normal.x*lit.x+f.normal.y*lit.y+f.normal.z*lit.z)));
+        return {id:f.id,points:f.points,shade};
+      })
+      .sort((a,b)=>b.depth-a.depth);
+  }
+  // 部件在观察系中的中心深度（多部件画家算法排序用：远的先画）
+  function blockDepth(part,az){
+    const ca=Math.cos(az),sa=Math.sin(az);
+    return part.x*sa+part.z*ca;
+  }
+
+  return {labels,shapeNames,caption,polygon,createPart,tracePart,updatePart,removePart,variants,diff,editRegion,snapshot,
+    needsNormalize,normalizeParts,sideRect,topRect,depthSpan,blockFaces,blockDepth,defaultDepth};
 });
 

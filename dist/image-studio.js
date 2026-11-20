@@ -16,7 +16,7 @@
   const canvas = $('#studioCanvas');
   const overlay = $('#studioOverlay');
   const form = $('#studioOperation');
-  const kinds = {instant:'快速渲染',render:'提示渲染',modify:'修改图像',color:'配色变化',form:'造型变化',view:'生成视角',cutout:flow.names.cutout,upscale:flow.names.upscale,outpaint:flow.names.outpaint};
+  const kinds = {instant:'快速渲染',render:'提示渲染',explore:'方案发散',scene:'情境渲染',studio:'高品质呈现',modify:'修改图像',color:'配色变化',form:'造型变化',view:'生成视角',cutout:flow.names.cutout,upscale:flow.names.upscale,outpaint:flow.names.outpaint};
   const toolHints = {brush:'画笔 · 拖动画线',erase:'橡皮 · 擦除当前手绘层',lasso:'套索 · 圈出要修改的区域',rect:'矩形 · 拖出修改区域'};
   const iconNS = 'http://www.w3.org/2000/svg';
   const defaultEndpoint = 'http://127.0.0.1:8188';
@@ -24,7 +24,7 @@
 
   let store, doc, activeLayerId, tool = 'brush', selection = [], gesture, picked, showInput = false;
   let pending = Promise.resolve(), saving = 0, displayToken = 0, running, connecting;
-  let settings = {}, retrySeed;
+  let settings = {}, retrySeed, retryRun, runningInfo;
   const undo = [], redo = [];
   const thumbnails = new Map();
   const asset = () => doc?.assets && Object.hasOwn(doc.assets, assetId) ? doc.assets[assetId] : undefined;
@@ -42,6 +42,32 @@
   },syncOperation);
   const angles=variations.viewpoint([],syncOperation);
   $('#studioVariation').append(formControl.root,palette.root,angles.root);
+  // 方案发散的方向勾选：默认前四个，至少两个、至多六个。
+  for(const [key,preset] of Object.entries(flow.directionPresets)){
+    const label=element('label','direction-item');
+    const input=element('input');
+    input.type='checkbox';input.value=key;input.checked=['minimal','organic','rugged','retro'].includes(key);
+    input.addEventListener('change',syncOperation);
+    label.append(input,element('span','',preset.label));
+    $('#studioDirectionList').append(label);
+  }
+  // 模块 4：呈现镜头（默认主图+特写）与材质预设。
+  for(const [key,preset] of Object.entries(flow.shotPresets)){
+    const label=element('label','direction-item');
+    const input=element('input');
+    input.type='checkbox';input.value=key;input.checked=true;
+    input.addEventListener('change',syncOperation);
+    label.append(input,element('span','',preset.label));
+    $('#studioShotList').append(label);
+  }
+  $('#studioMaterial').append(...Object.entries(flow.materialPresets).map(([key,preset])=>new Option(preset.label,key)));
+  const readShots=()=>[...document.querySelectorAll('#studioShotList input:checked')].map(input=>input.value);
+  const readDirections=()=>[...document.querySelectorAll('#studioDirectionList input:checked')].map(input=>input.value);
+  function writeDirections(list){
+    const wanted=flow.normalizeDirections(list);
+    if(!wanted.length)return;
+    for(const input of document.querySelectorAll('#studioDirectionList input'))input.checked=wanted.includes(input.value);
+  }
 
   $('#studioClose').href = boardSelection;
   $('#studioReturn').href = boardUrl;
@@ -151,7 +177,22 @@
     ).sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
     area.replaceChildren();
     $('#studioResultCount').textContent = jobs.reduce((count,job) => count + job.outputs.length,0);
-    if (!jobs.length) area.append(element('p','run-hint','生成的候选会出现在这里。'));
+    if (runningInfo) {
+      const waiting = Math.max(0,runningInfo.count - runningInfo.done);
+      const group = element('section','run-group is-pending');
+      const heading = element('div','run-heading');
+      heading.append(element('strong','',runningInfo.label + ' · 生成中'),element('span','',runningInfo.done + '/' + runningInfo.count));
+      const grid = element('div','candidate-grid');
+      for (let i = 0; i < waiting; i++) {
+        const card = element('div','candidate skeleton');
+        card.setAttribute('aria-hidden','true');
+        grid.append(card);
+      }
+      group.setAttribute('aria-busy','true');
+      group.append(heading,grid);
+      area.append(group);
+    }
+    if (!jobs.length && !runningInfo) area.append(element('p','run-hint','生成的候选会出现在这里。'));
     for (const job of jobs) {
       const group = element('section','run-group');
       const heading = element('div','run-heading');
@@ -159,6 +200,11 @@
       const finish = job.kind==='instant' ? ' · '+(flow.fidelityStages[job.settings?.targetFidelity]?.label||'自动推进') : '';
       const title = (kinds[job.kind] || '生成') + finish + (job.rerunOf ? ' · 按原输入重跑' : '');
       heading.append(element('strong','',title),element('time','',date));
+      if (job.outputs.length >= 2) {
+        const compareButton = control('并排对比','link compare-open',() => openCompare(job.id));
+        compareButton.textContent = '并排对比';
+        heading.append(compareButton);
+      }
       if (job.prompt) heading.title = job.prompt;
       const grid = element('div','candidate-grid');
       for (const [index,output] of job.outputs.entries()) {
@@ -189,19 +235,108 @@
     $('#studioShowInput').textContent = showInput ? '查看候选' : '查看源图';
     $('#studioShowInput').setAttribute('aria-pressed',String(showInput));
     const toolOutput=pickedOutput();
-    const enlarged=['upscale','outpaint'].includes(doc?.jobs?.[picked?.jobId]?.kind)&&(toolOutput?.width!==asset()?.width||toolOutput?.height!==asset()?.height);
+    const pickedKind=doc?.jobs?.[picked?.jobId]?.kind;
+    const enlarged=['upscale','outpaint','studio'].includes(pickedKind)&&(toolOutput?.width!==asset()?.width||toolOutput?.height!==asset()?.height);
     $('#studioApplyResult').disabled=showInput||enlarged;
     $('#studioApplyResult').textContent=toolOutput?.transparent&&!enlarged?'应用透明图层':'添加到图层';
-    $('#studioApplyResult').title=enlarged?'放到工作台或导出可保留放大尺寸':'';
+    $('#studioApplyResult').title=enlarged?(pickedKind==='studio'?'呈现图尺寸与画布不同，请放到工作台，再在工作台上放大 2×':'放到工作台或导出可保留放大尺寸'):'';
     const onBoard = !!(pickedOutput() && doc.assets[pickedOutput().id]);
     $('#studioPromoteResult').disabled = showInput || onBoard;
     $('#studioPromoteResult').textContent = onBoard ? '已在工作台' : '放到工作台';
     $('#studioRerun').disabled = !!running || !doc?.jobs?.[picked?.jobId]?.inputBlobId;
+    $('#studioCandidate3d').disabled = showInput || !pickedOutput()?.blobId;
+  }
+
+  // 模块 2：并排对比。源图 + 本轮全部候选同屏，点选后可采用为图层或放到工作台。
+  let compareState;
+  function openCompare(jobId) {
+    const job = doc?.jobs?.[jobId];
+    if (!job?.outputs?.length) return;
+    compareState = {jobId, outputId: picked?.jobId === jobId ? picked.outputId : undefined};
+    renderCompare();
+    const dialog = $('#studioCompare');
+    if (!dialog.open) dialog.showModal();
+  }
+  function renderCompare() {
+    const job = doc?.jobs?.[compareState?.jobId];
+    const grid = $('#studioCompareGrid');
+    grid.replaceChildren();
+    if (!job) return;
+    $('#studioCompareMeta').textContent = (kinds[job.kind] || '生成') + ' · ' + job.outputs.length + ' 个候选';
+    if (job.inputBlobId) {
+      const source = element('figure','compare-cell is-source');
+      source.append(thumb(job.inputBlobId,''),element('figcaption','','源图'));
+      grid.append(source);
+    }
+    for (const [index,output] of job.outputs.entries()) {
+      const name = output.name || '候选 ' + (index + 1);
+      const cell = control('选择 ' + name,'compare-cell',() => {
+        compareState.outputId = output.id;
+        renderCompare();
+      });
+      cell.dataset.outputId = output.id;
+      cell.setAttribute('aria-pressed',String(compareState.outputId === output.id));
+      if (output.blobId) cell.append(thumb(output.blobId,''));
+      cell.append(element('span','compare-name',name));
+      grid.append(cell);
+    }
+    const chosen = job.outputs.find(output => output.id === compareState.outputId);
+    const onBoard = !!(chosen && doc.assets[chosen.id]);
+    $('#studioCompareApply').disabled = !chosen?.blobId;
+    $('#studioComparePromote').disabled = !chosen || onBoard;
+    $('#studioComparePromote').textContent = onBoard ? '已在工作台' : '放到工作台';
+    if (!chosen) status($('#studioCompareStatus'),'点选一张候选，再采用或放到工作台。');
+  }
+  function compareChoice() {
+    const job = doc?.jobs?.[compareState?.jobId];
+    return job && job.outputs.find(output => output.id === compareState.outputId);
+  }
+
+  // 模块 5：情境化设计。照片在最底层，笔触层在上；缺任一项都给出明确提示。
+  function sceneReady() {
+    const visible = layers().filter(layer => layer.visible !== false && (layer.opacity ?? 1) > 0);
+    const photo = visible.some(layer => layer.kind === 'image' && layer.blobId);
+    const sketch = visible.some(layer => layer.kind === 'ink' && layer.strokes?.some(stroke => !stroke.erase));
+    return {photo, sketch, ok: photo && sketch};
+  }
+  function syncScene() {
+    const ready = sceneReady();
+    const note = $('#studioSceneStatus');
+    if (note.dataset.lock) return;
+    status(note, !ready.photo ? '第一步：上传一张场景照片（无笔触时画布会跟随照片比例）。'
+      : !ready.sketch ? '第二步：在照片上画出产品草图。' : '照片和草图已就绪。', false);
+  }
+  async function importScenePhoto(file) {
+    const note = $('#studioSceneStatus');
+    const image = await regions.decode(file);
+    const ratioW = image.width, ratioH = image.height;
+    image.close();
+    const long = Math.min(2048, Math.max(512, Math.max(ratioW, ratioH)));
+    const scale = long / Math.max(ratioW, ratioH);
+    const width = Math.round(ratioW * scale / 8) * 8, height = Math.round(ratioH * scale / 8) * 8;
+    const id = crypto.randomUUID();
+    let resized = false;
+    const wrote = await changeLayers((all, current) => {
+      const inked = all.some(layer => layer.kind === 'ink' && layer.strokes?.length);
+      if (!inked && (current.width !== width || current.height !== height)) {
+        current.width = width; current.height = height; resized = true;
+      }
+      all.unshift({id, name: '场景照片 · ' + (file.name.replace(/\.[^.]+$/, '') || '照片'), kind: 'image', blobId: id, visible: true, opacity: 1});
+    }, [{id, blob: file}]);
+    if (!wrote) return;
+    activeLayerId = id;
+    note.dataset.lock = '1';
+    status(note, resized ? '画布已跟随照片比例：' + width + ' × ' + height + '。现在在照片上画产品草图。'
+      : '照片已放到最底层。画布已有笔触，保持原比例（照片按比例留白）。');
+    setTimeout(() => { delete note.dataset.lock; }, 4000);
+    fitCanvas();
+    syncLayers();
+    syncOperation();
   }
 
   function syncOperation() {
     const kind = $('#studioKind').value;
-    const instant=kind==='instant', isRender=kind==='render', isForm=kind==='form', isColor=kind==='color', isView=kind==='view';
+    const instant=kind==='instant', isExplore=kind==='explore', isRender=kind==='render'||isExplore, isForm=kind==='form', isColor=kind==='color', isView=kind==='view';
     const viewCount=isView?angles.read().length:0, imageTool=flow.isImageTool(kind);
     const expanding=kind==='outpaint';
     $('#studioExpandFields').hidden=!expanding;
@@ -215,6 +350,14 @@
     if(influenceMode){
       strengthInput.value=strengthInput.dataset.influence||'80';
       strengthInput.dataset.influence=strengthInput.value;
+    }else if(kind==='studio'){
+      // 高品质呈现以保形为主，默认改动强度 40%（img2img 保留造型）。
+      strengthInput.value=strengthInput.dataset.studio||'40';
+      strengthInput.dataset.studio=strengthInput.value;
+    }else if(kind==='scene'){
+      // 情境渲染需要高重绘强度才能把草图区域变成实物；单独记忆，默认 85%。
+      strengthInput.value=strengthInput.dataset.scene||'85';
+      strengthInput.dataset.scene=strengthInput.value;
     }else{
       strengthInput.value=strengthInput.dataset.adjust||'55';
       strengthInput.dataset.adjust=strengthInput.value;
@@ -223,21 +366,33 @@
     $('#studioStrengthField').hidden=imageTool||(isForm&&!!(direction.x||direction.y));
     $('#studioFidelityField').hidden=!instant;
     $('#studioVariation').hidden=!isForm&&!isColor&&!isView;
+    const isScene=kind==='scene';
+    $('#studioSceneFields').hidden=!isScene;
+    if(isScene) syncScene();
+    const isStudio=kind==='studio', shotCount=isStudio?readShots().length:0;
+    $('#studioShots').hidden=!isStudio;
+    $('#studioShots').disabled=!!running;
+    const directionCount=isExplore?readDirections().length:0;
+    $('#studioDirections').hidden=!isExplore;
+    $('#studioDirections').disabled=!!running;
+    $('#studioDirectionCount').textContent=isExplore?directionCount+' / '+flow.directionLimit:'';
+    for(const input of document.querySelectorAll('#studioDirectionList input'))input.disabled=!!running||(!input.checked&&directionCount>=flow.directionLimit);
     formControl.root.hidden=!isForm;
     palette.root.hidden=!isColor;
     angles.root.hidden=!isView;
     formControl.root.disabled=palette.root.disabled=angles.root.disabled=!!running;
-    $('#studioPromptField').hidden=instant||imageTool;
-    $('#studioPromptField label').textContent=isForm||isColor||viewCount?'补充说明（可选）':isView?'描述目标角度':'描述想要的结果';
+    // 实时辅助开启时提示词始终可改，改动 500 ms 后自动重渲。
+    $('#studioPromptField').hidden=(instant||imageTool)&&!stage.dataset.live;
+    $('#studioPromptField label').textContent=isForm||isColor||viewCount||isExplore||isStudio?'补充说明（可选）':isView?'描述目标角度':'描述想要的结果';
     const quantity=$('#studioQuantity'), allowed=flow.quantityOptions(kind);
     for(const item of quantity.options) item.hidden=item.disabled=!allowed.includes(Number(item.value));
     if(!allowed.includes(Number(quantity.value))) quantity.value='1';
-    quantity.closest('label').hidden=quantity.disabled=!!viewCount||imageTool;
+    quantity.closest('label').hidden=quantity.disabled=!!viewCount||imageTool||isExplore||isStudio;
     quantity.closest('.operation-split').hidden=imageTool||expanding;
     $('#studioGenerateLabel').textContent=instant?'渲染':imageTool?'运行':'生成';
     const target=flow.resolveFidelity(doc||{jobs:{}},asset(),$('#studioFidelity').value);
     const renderInputs=$('#studioRenderInputs'), reference=$('#studioReference'), style=$('#studioRenderStyle');
-    renderInputs.hidden=!instant&&kind!=='render';
+    renderInputs.hidden=!instant&&!isRender;
     const previous=reference.value;
     const candidates=Object.values(doc?.assets||{}).filter(item=>item.id!==assetId&&item.mediaType!=='video'&&
       (item.draft?.parts.length||item.layers?.some(layer=>layer.visible!==false&&(layer.blobId||layer.strokes?.length))));
@@ -249,7 +404,10 @@
     const hints = {
       instant:'本次目标：'+flow.fidelityStages[target].label+'。自动推进依据已有阶段记录，首次从色块开始。输出保持源图尺寸。',
       render:'根据画布中的草图渲染。已连接的 ControlNet 会约束轮廓。',
+      explore:directionCount<2?'至少选择两个设计方向。':'同一张草图按 '+directionCount+' 个方向各出一张，轮廓由 ControlNet 锁定，生成后可并排对比。',
       modify:selectionValid() ? '本次仅修改选区，保留选区外的画面。' : '套索或矩形可以把修改限制在选区内。',
+      scene:selectionValid() ? '只渲染圈出的区域，草图约束造型，照片其余像素保持不变。' : '只渲染草图所在区域（自动按草图范围定区，也可用套索圈定），照片其余像素保持不变。',
+      studio:!shotCount?'至少选择一种镜头。':[readShots().includes('hero')?'棚拍主图：两段高清采样，长边 1280，跟随原图比例':'',readShots().includes('detail')?(selectionValid()?'材质特写：放大圈出的区域到 1280×1024':'材质特写：放大画面中心到 1280×1024，可用套索指定部位'):''].filter(Boolean).join('；')+'。',
       color:'从当前图层提取颜色后调整色板，也可以直接添加目标色。',
       form:'拖动圆点或调整横轴与纵轴。离中心越远，变化越明显。',
       view:viewCount?'':'也可直接描述目标角度，例如右前方 30°。',
@@ -257,12 +415,12 @@
       outpaint:'本机 ComfyUI · 仅生成新增区域，原图区域保留。扩图结果可作为新图放到工作台。',
       upscale:'本机 ComfyUI · 长边最多 4096 像素，放到工作台或导出可保留尺寸。'
     };
-    const billing=(isForm||isColor||isView)&&['runninghub','imageapi'].includes(settings.provider)?(viewCount||quantity.value)+' 张，按次计费':'';
+    const billing=(isForm||isColor||isView||isExplore)&&['runninghub','imageapi'].includes(settings.provider)?(viewCount||directionCount||quantity.value)+' 张，按次计费':'';
     const hint=$('#studioRunHint');
     hint.textContent=[hints[kind],billing].filter(Boolean).join(' · ');
     hint.hidden=!hint.textContent;
     $('#studioClearSelection').hidden = !selectionValid();
-    $('#studioGenerate').disabled = !!running;
+    $('#studioGenerate').disabled = !!running||(isExplore&&directionCount<2)||(isScene&&!sceneReady().ok)||(isStudio&&!shotCount);
     $('#studioCancelRun').hidden = !running;
     $('#studioModelSettings').disabled = !!running;
     $('#studioHint').textContent = selectionValid() ? '选区已就绪' : toolHints[tool];
@@ -388,6 +546,7 @@
     $('#studioDimensions').textContent = current.width + ' × ' + current.height;
     syncLayers();
     syncResults();
+    syncThemeFields();
     syncOperation();
     fitCanvas();
     void renderCanvas();
@@ -409,6 +568,7 @@
     liveBlend.style.opacity=String(Number($('#studioLiveOpacity').value)/100);
     for(const button of document.querySelectorAll('[data-live-view]'))button.setAttribute('aria-pressed',String(button.dataset.liveView===liveView));
     $('#studioLiveApply').disabled=!liveBlob;
+    $('#studioLive3d').disabled=!liveBlob;
     $('#studioLiveHD').disabled=!liveBlob||!!hdBusy;
     syncThemeButton();
     fitCanvas();
@@ -482,10 +642,15 @@
       $('#studioLiveSize').textContent='';
     }
     $('#studioLiveEmpty').hidden=!!liveUrl;
+    // 失败态：就地显示原因与「重试」，不必关掉实时辅助再开。
+    const failed=state.status==='failed'&&!(state.error?.name==='AbortError');
+    $('#studioLiveRetry').hidden=!failed;
+    $('#studioLivePane').dataset.failed=String(failed);
+    if(failed)$('#studioLiveEmpty').hidden=!!liveUrl;
     const qwenLive=qwenCheckpoint.test(flow.modelPrefs().checkpoint||'');
     $('#studioLiveState').textContent=state.status==='running'
       ?(qwenLive?'正在渲染（Qwen 高质量 · 慢速）…':'正在渲染…')
-      :state.status==='failed'?'渲染失败':
+      :state.status==='failed'?'渲染失败：'+String(state.error?.message||'未知错误').slice(0,80):
       state.status==='paused'?'已暂停':state.status==='hd'?'正在生成高清帧…':
       state.status==='waiting'?'等待笔触':liveUrl?'已跟上最新笔触':'等待笔触';
     if(state.error)status($('#studioRunStatus'),state.error.message,true);
@@ -501,7 +666,9 @@
       signal.throwIfAborted();
       const prompt=[
         $('#studioPrompt').value.trim()||'Industrial design concept preview.',
-        window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
+        window.WuyingWorkspaceRender.themeDirective(asset()?.theme),
+        briefDirective(),
+        angleDirective()
       ].filter(Boolean).join(' ');
       // Qwen 实时通道：草图作参考图，按画质档降低分辨率（512/640/768）；
       // 失败（8GB 显存不足等）自动降到 512 重试一次，仍失败才报错。
@@ -529,31 +696,19 @@
   });
   // 方案主题：写入当前 asset.theme；实时渲染每次取最新值，保存后立刻重渲。
   const themePop = $('#studioThemePop');
-  function syncThemeButton() {
-    const theme = asset()?.theme;
-    const text = String(theme?.text || '').trim();
-    const custom = String(theme?.custom || '').trim();
-    const active = !!(text || custom);
-    $('#studioLiveTheme').classList.toggle('has-theme', active);
-    $('#studioLiveTheme').title = active
-      ? '主题：' + (text || custom).slice(0, 60)
-      : '给这张方案设置主题，实时渲染会跟着主题走';
+  const themeBrief = $('#studioThemeBrief');
+  let themeTimer;
+  // 把 asset.theme.text 同步到右侧常驻框与工具条浮层；正在编辑的控件不覆盖，避免打断输入。
+  function syncThemeFields(active) {
+    const text = String(asset()?.theme?.text || '');
+    if (themeBrief !== active) themeBrief.value = text;
+    if ($('#studioThemeText') !== active) $('#studioThemeText').value = text;
+    syncThemeButton();
   }
-  function openTheme() {
-    const theme = asset()?.theme || {};
-    $('#studioThemeText').value = theme.text || '';
-    $('#studioThemeCustom').value = theme.custom || '';
-    themePop.hidden = false;
-    $('#studioLiveTheme').setAttribute('aria-expanded', 'true');
-    $('#studioThemeText').focus();
-  }
-  function closeTheme() {
-    themePop.hidden = true;
-    $('#studioLiveTheme').setAttribute('aria-expanded', 'false');
-  }
-  function saveTheme() {
-    const text = $('#studioThemeText').value.trim().slice(0, 300);
-    const custom = $('#studioThemeCustom').value.trim().slice(0, 1200);
+  // 单一写入口：右侧常驻框与浮层「完成」都走这里，保证两处数据源一致。
+  function writeTheme(text, custom, { closePop = false } = {}) {
+    text = String(text || '').trim().slice(0, 300);
+    custom = String(custom || '').trim().slice(0, 1200);
     saving += 1;
     saved('正在保存主题', 'saving');
     const operation = pending.then(async () => {
@@ -572,11 +727,238 @@
     }).then(() => {
       saving -= 1;
       saved('已保存主题', 'saved');
-      syncThemeButton();
+      syncThemeFields();
       refresh();
       scheduleLive();
-      closeTheme();
+      if (closePop) closeTheme();
     });
+  }
+  function syncThemeButton() {
+    const theme = asset()?.theme;
+    const text = String(theme?.text || '').trim();
+    const custom = String(theme?.custom || '').trim();
+    const active = !!(text || custom);
+    $('#studioLiveTheme').classList.toggle('has-theme', active);
+    $('#studioLiveTheme').title = active
+      ? '主题：' + (text || custom).slice(0, 60)
+      : '给这张方案设置主题，实时渲染会跟着主题走';
+  }
+  function openTheme() {
+    const theme = asset()?.theme || {};
+    syncThemeFields();
+    $('#studioThemeCustom').value = theme.custom || '';
+    themePop.hidden = false;
+    $('#studioLiveTheme').setAttribute('aria-expanded', 'true');
+    $('#studioThemeText').focus();
+  }
+  function closeTheme() {
+    themePop.hidden = true;
+    $('#studioLiveTheme').setAttribute('aria-expanded', 'false');
+  }
+  function saveTheme() {
+    return writeTheme($('#studioThemeText').value, $('#studioThemeCustom').value, { closePop: true });
+  }
+
+  // ── 造型流程：阶段轨道 + 产品方向 ──────────────────────────────
+  // 阶段只是引导与预设：sketch 自由画，refine 跳部件编辑器（锁定载体），
+  // ortho 预选三视图角度，render 显示角度球。锁定与出图仍走同一条链路。
+  // P0 收口：前进条件 + 过期标记（橙点）+ 冻结快照，逻辑在 flow-stages.js。
+  const flowStages=['sketch','refine','ortho','render'];
+  const stageBook=window.WuyingFlowStages;
+  const briefPresets={};
+  function flowState(){return asset()?.flow||{};}
+  function flowBrief(){const brief=flowState().brief;return brief&&typeof brief==='object'?brief:{};}
+  function briefDirective(){
+    const {category,text}=flowBrief();
+    const parts=[];
+    if(category) parts.push('Product category: '+category+'.');
+    if(text) parts.push('Design direction: '+text+'.');
+    return parts.join(' ');
+  }
+  function angleDirective(){
+    if(flowState().stage!=='render'||!angleSphere) return '';
+    const mapped=window.WuyingAngleSphere.mapToView(angleSphere.read().azimuth,angleSphere.read().elevation);
+    const preset=flow.viewPresets[mapped.view];
+    return preset?'Target camera angle: '+preset.prompt:'';
+  }
+  function syncFlowRail(){
+    const stage=stageBook.normalizeStage(flowState().stage);
+    for(const step of document.querySelectorAll('#studioFlowRail .flow-step')){
+      step.classList.toggle('is-active',step.dataset.stage===stage);
+      step.setAttribute('aria-current',step.dataset.stage===stage?'step':'false');
+      // 过期标记：上游改过之后，该阶段的旧结果可能不再成立
+      const stale=stageBook.staleOf(flowState(),step.dataset.stage);
+      step.classList.toggle('is-stale',stale);
+      step.title=stale?'上游已修改：这一阶段的旧结果可能过期，进入后可重新生成或保留':step.title;
+    }
+    const brief=flowBrief(), briefText=[brief.category,brief.text].filter(Boolean).join(' · ');
+    const tag=$('#studioFlowBrief');
+    tag.textContent=briefText?'产品方向：'+briefText:'设置产品方向';
+    tag.hidden=!briefText&&stage!=='sketch';
+    $('#sketchQuick').hidden=stage!=='sketch';
+    $('#orthoQuick').hidden=stage!=='ortho';
+    $('#studioAngleBox').hidden=stage!=='render';
+    if(stage==='ortho'&&!angles.read().length) angles.write(['front','left','top']);
+    if(stage==='ortho'||stage==='render') $('#studioKind').value='view';
+    if(stage!=='sketch') $('#studioFidelityField').hidden=true;
+    if(stage==='render') initAngleSphere();
+  }
+  async function setFlowStage(stage){
+    await pending;
+    let enteredStale=false;
+    doc=await store.change(current=>{
+      const target=current.assets[assetId];
+      if(!target) throw new Error('这张图已经从工作台移除。');
+      const next={...(target.flow||{}),stage};
+      next.stages={...(target.flow?.stages||{})};
+      // 冻结快照：进入三视图时冻结微调结构修订号；进入渲染时冻结三视图画布
+      if(stage==='ortho'&&target.draft?.revision){
+        stageBook.capture(next,'refine',{revision:target.draft.revision});
+      }
+      if(stage==='render'){
+        stageBook.capture(next,'ortho',{layersSig:stageBook.layersSig(target.layers)});
+      }
+      enteredStale=stageBook.staleOf(next,stage);
+      target.flow=next;
+      target.updatedAt=Date.now();
+    });
+    syncFlowRail();
+    syncOperation();
+    if(enteredStale) status($('#studioRunStatus'),'上游已修改：这一阶段的旧结果可能过期，可重新生成，也可以先沿用旧结果。');
+  }
+  // 草图造型 → 精细微调：把当前合成图存为部件草稿的底图，再进入部件编辑器。
+  async function toRefine(){
+    const button=$('#studioFlowRail [data-stage="refine"]');
+    button.disabled=true;
+    try{
+      await pending;
+      const current=asset();
+      if(!current) throw new Error('这张图已经从工作台移除。');
+      if(current.draft){ location.assign('shape-studio.html'+location.search); return; }
+      if(!liveHasContent(current)) throw new Error('画布还是空的，先画一个造型再进入微调。');
+      const blobId=crypto.randomUUID();
+      const blob=await compose.toPng(current,store);
+      doc=await store.change(doc2=>{
+        const target=doc2.assets[assetId];
+        if(!target) throw new Error('这张图已经从工作台移除。');
+        target.draft={revision:crypto.randomUUID(),parts:[],reference:{blobId,assetId,label:target.name}};
+        const next={...(target.flow||{}),stage:'refine'};
+        // 冻结快照：把此刻的画布合成图与图层摘要存档，之后草图再改动就会触发过期标记
+        stageBook.capture(next,'sketch',{blobId,layersSig:stageBook.layersSig(target.layers)});
+        target.flow=next;
+        target.updatedAt=Date.now();
+      },[{id:blobId,blob}]);
+      location.assign('shape-studio.html'+location.search);
+    }catch(error){
+      status($('#studioRunStatus'),error.message,true);
+    }finally{ button.disabled=false; }
+  }
+  // 一键转线稿：跑「整理线稿」，完成后自动加为新图层。
+  async function toLineart(){
+    if(running) return;
+    const button=$('#studioToLineart');
+    const prefs=flow.modelPrefs();
+    if(!prefs.endpoint||!prefs.checkpoint){
+      status($('#studioRunStatus'),'请在模型设置里选择 ComfyUI 基础模型。',true);
+      showModel();
+      return;
+    }
+    button.disabled=true;
+    status($('#studioRunStatus'),'正在整理线稿…');
+    try{
+      await pending;
+      const job=await flow.run(store,{kind:'instant',sourceId:assetId,fidelity:'line',quantity:1,
+        provider:'comfy',endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,controlnet:prefs.controlnet},
+        {onStatus:message=>status($('#studioRunStatus'),message)});
+      const output=job.outputs?.at(-1);
+      if(!output?.blobId) throw new Error('线稿生成失败，请重试。');
+      await addImage(output.blobId,'整理线稿',[{id:output.blobId,blob:await store.getBlob(output.blobId)}]);
+      exitPreview();
+      status($('#studioRunStatus'),'线稿已加为新图层，可继续在上面画或进入微调。');
+    }catch(error){
+      status($('#studioRunStatus'),'转线稿失败：'+error.message,true);
+    }finally{ button.disabled=false; }
+  }
+  // 产品方向浮层
+  const briefPop=$('#studioFlowBriefPop');
+  function openBrief(){
+    const brief=flowBrief();
+    $('#flowBriefCategory').value=brief.category||'';
+    $('#flowBriefText').value=brief.text||'';
+    briefPop.hidden=false;
+    $('#flowBriefText').focus();
+  }
+  function closeBrief(){briefPop.hidden=true;}
+  async function saveBrief(){
+    const category=$('#flowBriefCategory').value.trim(), text=$('#flowBriefText').value.trim().slice(0,200);
+    await pending;
+    doc=await store.change(current=>{
+      const target=current.assets[assetId];
+      if(!target) throw new Error('这张图已经从工作台移除。');
+      const next={...(target.flow||{})};
+      if(category||text) next.brief={category,text}; else delete next.brief;
+      target.flow=next;
+      target.updatedAt=Date.now();
+    });
+    closeBrief();
+    syncFlowRail();
+    scheduleLive();
+    status($('#studioRunStatus'),'产品方向已保存，实时辅助与渲染会按这个方向走。');
+  }
+  document.addEventListener('pointerdown',event=>{
+    if(briefPop.hidden||briefPop.contains(event.target)||event.target.closest?.('#studioFlowBrief'))return;
+    closeBrief();
+  });
+  $('#studioFlowBrief').addEventListener('click',()=>briefPop.hidden?openBrief():closeBrief());
+  $('#flowBriefSave').addEventListener('click',()=>void saveBrief());
+  $('#flowBriefClear').addEventListener('click',()=>{$('#flowBriefCategory').value='';$('#flowBriefText').value='';});
+  for(const step of document.querySelectorAll('#studioFlowRail .flow-step[data-stage]')){
+    step.addEventListener('click',()=>{
+      const stage=step.dataset.stage;
+      // 前进条件：产品渲染需要画面里有内容（三视图齐全的替代校验），不满足时报原因不切换
+      if(stage==='render'&&!liveHasContent(asset())){
+        status($('#studioRunStatus'),'还没有可渲染的画面：先在前面的阶段生成图，或回到草图画一个造型。',true);
+        return;
+      }
+      if(stage==='refine'&&asset()?.draft&&stageBook.staleOf(flowState(),'refine')){
+        status($('#studioRunStatus'),'上游草图已修改：旧部件草稿基于修改前的画面，可在微调页继续沿用，或重新进入生成新草稿。');
+      }
+      if(stage==='refine') void toRefine();
+      else void setFlowStage(stage);
+    });
+  }
+  $('#studioToLineart').addEventListener('click',()=>void toLineart());
+  // ── 角度球（阶段 5）──────────────────────────────────────────
+  let angleSphere=null;
+  function syncAngleLabel(){
+    if(!angleSphere) return;
+    const {azimuth,elevation}=angleSphere.read();
+    const mapped=window.WuyingAngleSphere.mapToView(azimuth,elevation);
+    $('#studioAngleLabel').textContent='当前视角：'+flow.viewPresets[mapped.view].label+'（水平 '+Math.round(azimuth)+'° · 俯仰 '+Math.round(elevation)+'°）';
+  }
+  async function generateFromAngle(){
+    if(!angleSphere) return;
+    const {azimuth,elevation}=angleSphere.read();
+    const mapped=window.WuyingAngleSphere.mapToView(azimuth,elevation);
+    $('#studioKind').value='view';
+    angles.write([mapped.view]);
+    syncOperation();
+    void generate();
+  }
+  function initAngleSphere(){
+    if(angleSphere||!window.WuyingAngleSphere) return;
+    angleSphere=window.WuyingAngleSphere.create({size:148,onChange:({azimuth,elevation})=>{
+      syncAngleLabel();
+      const mapped=window.WuyingAngleSphere.mapToView(azimuth,elevation);
+      $('#studioKind').value='view';
+      angles.write([mapped.view]);
+      syncOperation();
+      if($('#studioAngleAuto').checked){
+        if(liveEnabled) scheduleLive(); else void generate();
+      }else scheduleLive();
+    }});
+    $('#studioAngleSphere').append(angleSphere.root);
+    syncAngleLabel();
   }
 
   function liveHasContent(current) {
@@ -660,6 +1042,7 @@
     if(!enabled)clearLiveFrames();
     showLive({status:'idle'});
     syncResults();
+    syncOperation();
     if(enabled)scheduleLive();
   }
   // 实时面板内直接切换基础模型，不必打开全局设置；切换后立刻重渲。
@@ -694,8 +1077,16 @@
         if (!current) throw new Error('这张图已经从工作台移除。');
         current.layers ||= [];
         before = track ? clone(current.layers) : null;
-        if (update(current.layers) === false) return;
+        if (update(current.layers,current) === false) return;
         after = track ? clone(current.layers) : null;
+        // P0 过期标记：草图阶段改动画面后，与进入微调时冻结的图层摘要比对，
+        // 不一致就把微调/三视图/渲染标过期；改回快照状态则自动清除。
+        if ((current.flow?.stage||'sketch')==='sketch'&&current.flow?.stages?.sketch?.snapshot){
+          const flowNext={...current.flow,stages:{...current.flow.stages}};
+          const changed=stageBook.layersSig(current.layers)!==flowNext.stages.sketch.snapshot.layersSig;
+          stageBook.markStale(flowNext,'sketch',changed);
+          current.flow=flowNext;
+        }
         current.updatedAt = Date.now();
         wrote = true;
       }, blobs);
@@ -715,7 +1106,7 @@
       saving -= 1;
       if (wrote !== null && !saving) saved('已保存','saved');
       refresh();
-      if(wrote)scheduleLive();
+      if(wrote){ syncFlowRail(); scheduleLive(); }
       return wrote === true;
     });
   }
@@ -844,7 +1235,7 @@
     gesture = null;
     if (!cancelled && finished.mode === 'area') {
       selection = regions.enough(finished.points) ? finished.points : [];
-      if (selection.length) $('#studioKind').value = 'modify';
+      if (selection.length && !['scene','studio'].includes($('#studioKind').value)) $('#studioKind').value = 'modify';
       syncOperation();
     } else if (!cancelled) {
       const newId = crypto.randomUUID();
@@ -1007,7 +1398,11 @@
     const shape=kind==='form'?formControl.read():undefined;
     const colors=kind==='color'?palette.read():undefined;
     const views=kind==='view'?angles.read():undefined;
-    if(!flow.isImageTool(kind)&&!prompt&&kind!=='render'&&kind!=='instant'&&kind!=='outpaint'&&!(shape?.x||shape?.y||colors?.length||views?.length)){
+    const directions=kind==='explore'?readDirections():undefined;
+    const shots=kind==='studio'?readShots():undefined;
+    if(shots&&!shots.length) throw new Error('请至少选择一种呈现镜头：棚拍主图或材质特写。');
+    if(directions&&directions.length<2) throw new Error('方案发散至少选择两个设计方向。');
+    if(!flow.isImageTool(kind)&&!prompt&&!flow.sketchKinds.includes(kind)&&kind!=='outpaint'&&kind!=='studio'&&!(shape?.x||shape?.y||colors?.length||views?.length)){
       if(shape) formControl.focus();
       if(colors) palette.focus();
       if(views) throw Object.assign(new Error('请选择视角，或描述想要的角度。'),{field:'#studioPrompt'});
@@ -1016,16 +1411,16 @@
     }
     const strengthValue = Number($('#studioStrength').value) / 100;
     const request = {
-      kind,sourceId:assetId,prompt:kind==='instant'?'':prompt,fidelity:$('#studioFidelity').value,form:shape,palette:colors,views,
+      kind,sourceId:assetId,prompt:kind==='instant'?'':prompt,fidelity:$('#studioFidelity').value,form:shape,palette:colors,views,directions,shots,material:kind==='studio'?$('#studioMaterial').value:undefined,
       outpaint:kind==='outpaint'?{direction:$('#studioExpandDirection').value,percent:Number($('#studioExpandPercent').value)}:undefined,
       stageStyle:$('#studioRenderStyle').value,style:$('#studioRenderStyle').value,
-      references:(kind==='instant'||kind==='render')&&$('#studioReference').value
+      references:flow.sketchKinds.includes(kind)&&$('#studioReference').value
         ? [{id:$('#studioReference').value,role:$('#studioReferenceRole').value}] : undefined,
-      selection:kind === 'modify' && selectionValid() ? clone(selection) : undefined,
+      selection:(kind === 'modify' || kind === 'scene' || kind === 'studio') && selectionValid() ? clone(selection) : undefined,
       provider:settings.provider,cloudModel:settings.cloudModel,apiProfileId:settings.apiProfileId,
       endpoint:settings.endpoint,checkpoint:settings.checkpoint,controlnet:settings.controlnet,
       // render/instant 用草图影响力口径；strength 兼容旧消费方，压回 0–1。
-      ...(kind==='instant'||kind==='render'
+      ...(flow.sketchKinds.includes(kind)
         ?{influence:strengthValue,strength:Math.min(1,strengthValue)}
         :{strength:strengthValue}),
       quantity:Number($('#studioQuantity').value),seed:retrySeed
@@ -1067,6 +1462,12 @@
     }
     const controller = new AbortController();
     running = controller;
+    retryRun = undefined;
+    $('#studioRetryRun').hidden = true;
+    // 结果区骨架占位：按本次要出的张数画出等待卡片，收到一张换一张。
+    runningInfo = {label:kinds[rerunJob?.kind||request.kind]||'生成',done:0,
+      count:rerunJob?.settings?.views?.length||rerunJob?.settings?.directions?.length||rerunJob?.settings?.shots?.length||rerunJob?.settings?.quantity
+        ||request.views?.length||request.directions?.length||request.shots?.length||request.quantity||1};
     syncOperation();
     syncResults();
     status($('#studioRunStatus'),rerunJob ? '读取这一批的输入快照…' : '准备源图…');
@@ -1079,6 +1480,7 @@
           const text = typeof message === 'string' ? message : message?.message;
           if (text) status($('#studioRunStatus'),text);
           if (progress?.output) {
+            if (runningInfo) runningInfo.done = progress.count || runningInfo.done;
             void pending.then(() => store.read()).then(latest => {
               if (running !== controller || saving) return;
               doc = latest;
@@ -1097,9 +1499,16 @@
       status($('#studioRunStatus'),result ? '已生成。选择候选预览或加入图层。' : '已结束。');
     } catch (error) {
       try { doc = await store.read(); } catch {}
-      status($('#studioRunStatus'),controller.signal.aborted ? '已取消生成。' : error.message,!controller.signal.aborted);
+      const aborted = controller.signal.aborted;
+      status($('#studioRunStatus'),aborted ? '已取消生成。' : '生成失败：' + error.message,!aborted);
+      if (!aborted) {
+        // 重试沿用这次的请求：表单请求换新种子重提，重跑请求沿用同一批快照。
+        retryRun = {rerunJob};
+        $('#studioRetryRun').hidden = false;
+      }
     } finally {
       running = undefined;
+      runningInfo = undefined;
       refresh();
     }
   }
@@ -1120,7 +1529,8 @@
       $('#studioExpandDirection').value=prior.outpaint.direction;
       $('#studioExpandPercent').value=String(prior.outpaint.percent);
     }
-    const influenceMode = job.kind === 'instant' || job.kind === 'render';
+    const influenceMode = flow.sketchKinds.includes(job.kind);
+    if (prior.directions?.length) writeDirections(prior.directions);
     if (influenceMode) {
       const influence = Number.isFinite(prior.influence) ? prior.influence : (Number.isFinite(prior.strength) ? prior.strength : .8);
       $('#studioStrength').dataset.influence = String(Math.round(influence * 100));
@@ -1202,6 +1612,13 @@
       if (!asset()) throw new Error('找不到这张图。');
       settings = await flow.modelPrefs() || {};
       $('#studioShell').hidden = false;
+      // 阶段轨道：支持 ?stage= 直达（精细微调返回三视图等），并持久化到 asset.flow.stage。
+      const requestedStage=new URLSearchParams(location.search).get('stage');
+      if(flowStages.includes(requestedStage)&&flowState().stage!==requestedStage){
+        await setFlowStage(requestedStage);
+      }
+      $('#studioFlowRail').hidden=false;
+      syncFlowRail();
       saved('已保存','saved');
       syncLiveModelSelect();
       refresh();
@@ -1215,6 +1632,14 @@
     location.assign(boardSelection);
   });
   $('#studioAddLayer').addEventListener('click',() => void addInk());
+  $('#studioScenePhoto').addEventListener('click',() => $('#studioSceneFile').click());
+  $('#studioSceneFile').addEventListener('change',async event => {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    try { await importScenePhoto(file); }
+    catch (error) { status($('#studioSceneStatus'),'照片无法载入：' + error.message,true); }
+  });
   $('#studioImportLayer').addEventListener('click',() => $('#studioLayerFile').click());
   $('#studioLayerFile').addEventListener('change',async event => {
     const file = event.target.files[0];
@@ -1262,7 +1687,7 @@
   $('#studioFidelity').addEventListener('change',syncOperation);
   $('#studioStrength').addEventListener('input',event => {
     const kind = $('#studioKind').value;
-    event.target.dataset[(kind === 'instant' || kind === 'render') ? 'influence' : 'adjust'] = event.target.value;
+    event.target.dataset[flow.sketchKinds.includes(kind) ? 'influence' : kind === 'scene' ? 'scene' : kind === 'studio' ? 'studio' : 'adjust'] = event.target.value;
     syncOperation();
   });
   $('#studioModelSettings').addEventListener('click',showModel);
@@ -1315,6 +1740,15 @@
   });
   $('#studioLiveTheme').addEventListener('click',()=>themePop.hidden?openTheme():closeTheme());
   $('#studioThemeDone').addEventListener('click',saveTheme);
+  // 常驻主题框：输入停顿 600ms 后保存；实时辅助开启时保存完立刻重渲一帧。
+  themeBrief.addEventListener('input',()=>{
+    syncThemeFields(themeBrief);
+    clearTimeout(themeTimer);
+    themeTimer=setTimeout(()=>{ themeTimer=0; void writeTheme(themeBrief.value,asset()?.theme?.custom); },600);
+  });
+  themeBrief.addEventListener('blur',()=>{
+    if(themeTimer){ clearTimeout(themeTimer); themeTimer=0; void writeTheme(themeBrief.value,asset()?.theme?.custom); }
+  });
   $('#studioThemeClear').addEventListener('click',()=>{
     $('#studioThemeText').value='';
     $('#studioThemeCustom').value='';
@@ -1329,6 +1763,12 @@
   });
   form.addEventListener('submit',generate);
   $('#studioCancelRun').addEventListener('click',() => running?.abort());
+  $('#studioRetryRun').addEventListener('click',() => { const job = retryRun?.rerunJob; void generate(null,job); });
+  $('#studioLiveRetry').addEventListener('click',() => {
+    $('#studioLiveRetry').hidden = true;
+    showLive({status:'waiting'});
+    scheduleLive();
+  });
   $('#studioExitPreview').addEventListener('click',exitPreview);
   $('#studioRestoreRun').addEventListener('click',restoreRun);
   $('#studioShowInput').addEventListener('click',() => {
@@ -1362,11 +1802,69 @@
       status($('#studioRunStatus'),error.message,true);
     } finally { syncResults(); }
   });
+  $('#studioCloseCompare').addEventListener('click',() => $('#studioCompare').close());
+  $('#studioCompareApply').addEventListener('click',async () => {
+    const chosen = compareChoice();
+    if (!chosen?.blobId) return;
+    const button = $('#studioCompareApply');
+    button.disabled = true;
+    try {
+      if (await addImage(chosen.blobId,chosen.name || '生成结果',[],!!chosen.transparent)) {
+        status($('#studioCompareStatus'),'已采用「' + (chosen.name || '候选') + '」为新图层。');
+        $('#studioCompare').close();
+        exitPreview();
+      }
+    } catch (error) {
+      status($('#studioCompareStatus'),'采用失败：' + error.message,true);
+    } finally { if ($('#studioCompare').open) renderCompare(); }
+  });
+  $('#studioComparePromote').addEventListener('click',async () => {
+    const chosen = compareChoice();
+    if (!chosen) return;
+    const button = $('#studioComparePromote');
+    button.disabled = true;
+    try {
+      await pending;
+      const jobId = compareState.jobId;
+      doc = await store.change(current => { flow.promoteOutput(current,jobId,chosen.id); });
+      renderCompare();
+      status($('#studioCompareStatus'),'已放到工作台。');
+    } catch (error) {
+      status($('#studioCompareStatus'),'放到工作台失败：' + error.message,true);
+      renderCompare();
+    } finally { syncResults(); }
+  });
   $('#studioRerun').addEventListener('click',() => {
     const job = doc?.jobs?.[picked?.jobId];
     if (job) void generate(null,job);
   });
   $('#studioExport').addEventListener('click',exportImage);
+  // 模块 3：3D 查看。来源优先级：正在预览的候选 > 画布合成；实时条另有入口取当前实时帧。
+  function open3d(kind) {
+    const viewer = window.WuyingView3D;
+    if (!viewer || !window.WuyingInflate) { status($('#studioRunStatus'),'3D 查看模块没有载入，请刷新页面。',true); return; }
+    const candidate = pickedOutput();
+    let getBlob, label, name;
+    if (kind === 'live') {
+      const blob = liveBlob;
+      if (!blob) return;
+      getBlob = async () => blob; label = '实时帧'; name = (asset()?.name || '物映') + ' 实时帧';
+    } else if (candidate?.blobId && !showInput) {
+      const blobId = candidate.blobId;
+      getBlob = () => store.getBlob(blobId); label = candidate.name || '候选'; name = candidate.name || '候选';
+    } else {
+      getBlob = async () => { await pending; return compose.toPng(asset(),store); }; label = '画布合成'; name = asset()?.name || '画布';
+    }
+    viewer.setCaptureSize({width:asset().width,height:asset().height});
+    void viewer.open({getBlob,name,sourceLabel:label,onCapture:async blob => {
+      const id = crypto.randomUUID();
+      if (pickedOutput()) exitPreview();
+      if (!await addImage(id,'3D 视角 · ' + label,[{id,blob}])) throw new Error('图层没有保存成功。');
+    }});
+  }
+  $('#studioOpen3d').addEventListener('click',() => open3d());
+  $('#studioCandidate3d').addEventListener('click',() => open3d());
+  $('#studioLive3d').addEventListener('click',() => open3d('live'));
   document.addEventListener('keydown',event => { if (asset()) keyboard(event); });
   new ResizeObserver(fitCanvas).observe(stage);
   window.addEventListener('storage',event=>{

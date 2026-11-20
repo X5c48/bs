@@ -116,3 +116,8 @@ button { cursor: pointer; }
 @media (max-width: 700px) {
   .files-heading { align-items: flex-start; flex-wrap: wrap; }
 }
+/* 新建文件 · 产品方向 */
+.dialog-hint { margin: 4px 0 0; color: var(--muted, #9b94ad); font-size: 11px; line-height: 1.5; }
+#brief-fields { display: grid; gap: 4px; margin-top: 10px; }
+#brief-fields label { font-size: 11px; color: var(--muted, #9b94ad); }
+#brief-fields select, #brief-fields input { width: 100%; box-sizing: border-box; }

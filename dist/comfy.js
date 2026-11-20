@@ -416,11 +416,12 @@
     });
   }
 
-  function regionWorkflow({ checkpoint, prompt, denoise, seed, image, mask }) {
+  // guide + controlnet：情境渲染时用草图约束选区内的造型（Scribble 需黑底白线，故反相）。
+  function regionWorkflow({ checkpoint, prompt, denoise, seed, image, mask, guide, controlnet, controlStrength = .9 }) {
     const node = (class_type, inputs) => ({ class_type, inputs });
     const turbo = /(?:^|[._ -])turbo(?:[._ -]|$)/i.test(checkpoint);
     const lcm = /(?:^|[._ -])lcm(?:[._ -]|$)/i.test(checkpoint);
-    return {
+    const graph = {
       1: node('CheckpointLoaderSimple', { ckpt_name: checkpoint }),
       2: node('CLIPTextEncode', { clip: ['1', 1], text: prompt }),
       3: node('CLIPTextEncode', { clip: ['1', 1], text: 'blurry, low quality, distorted edges, extra objects, text, watermark' }),
@@ -437,19 +438,35 @@
       10: node('VAEDecode', { samples: ['9', 0], vae: ['1', 2] }),
       [SAVE_NODE_ID]: node('PreviewImage', { images: ['10', 0] })
     };
+    if (guide && controlnet) {
+      graph[21] = node('LoadImage', { image: guide });
+      const lineart = /line[ _-]?art|misto[ _-]?line/i.test(controlnet), canny = /canny/i.test(controlnet);
+      if (canny) graph[22] = node('Canny', { image: ['21', 0], low_threshold: .2, high_threshold: .5 });
+      else if (!lineart) graph[22] = node('ImageInvert', { image: ['21', 0] });
+      graph[23] = node('ControlNetLoader', { control_net_name: controlnet });
+      graph[24] = node('ControlNetApplyAdvanced', {
+        positive: ['2', 0], negative: ['3', 0], control_net: ['23', 0], image: [graph[22] ? '22' : '21', 0],
+        strength: controlStrength, start_percent: 0, end_percent: 1, vae: ['1', 2]
+      });
+      graph[9].inputs.positive = ['24', 0];
+      graph[9].inputs.negative = ['24', 1];
+    }
+    return graph;
   }
 
-  async function renderRegion({ endpoint, checkpoint, prompt, denoise, sourceImage, maskImage, slot, signal, onStatus, seed }) {
+  async function renderRegion({ endpoint, checkpoint, prompt, denoise, sourceImage, maskImage, guideImage, controlnet, controlStrength, slot, signal, onStatus, seed }) {
     signal?.throwIfAborted();
     if (!checkpoint?.trim() || !prompt?.trim()) throw new Error('请选择基础模型，并说明选区里要改什么。');
     if (!Number.isFinite(denoise) || denoise < .25 || denoise > .95) throw new Error('选区改动强度须在 25% 到 95% 之间。');
     if (![sourceImage, maskImage].every(blob => blob instanceof Blob && blob.type === 'image/png' && blob.size)) {
       throw new Error('改图需要 PNG 原图和同尺寸的选区遮罩。');
     }
+    if (guideImage && !(guideImage instanceof Blob && guideImage.size)) throw new Error('草图控形图无效。');
+    const control = guideImage && typeof controlnet === 'string' && controlnet.trim() ? controlnet.trim() : '';
     const samplingSeed = Number.isInteger(seed) && seed >= 0 ? seed : crypto.getRandomValues(new Uint32Array(1))[0];
     return runWorkflow({
-      endpoint, inputBlob: sourceImage, maskBlob: maskImage, slot, signal, onStatus, cancelPending: true, pollInterval: 600,
-      build: (image, guide, mask) => regionWorkflow({ checkpoint, prompt, denoise, seed: samplingSeed, image, mask })
+      endpoint, inputBlob: sourceImage, maskBlob: maskImage, guideBlob: control ? guideImage : null, slot, signal, onStatus, cancelPending: true, pollInterval: 600,
+      build: (image, guide, mask) => regionWorkflow({ checkpoint, prompt, denoise, seed: samplingSeed, image, mask, guide, controlnet: control, controlStrength })
     });
   }
 

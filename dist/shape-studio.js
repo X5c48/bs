@@ -3,10 +3,11 @@
   if (!await window.WuyingLocalWorkspace.requireProject()) return;
   const $=id=>document.getElementById(id);
   const model=window.WuyingShapeModel, flow=window.WuyingWorkflow;
+  const stageBook=window.WuyingFlowStages;
   const projects=window.WuyingProjects, project=projects.get(projects.idFromLocation());
   const id=new URLSearchParams(location.search).get('asset');
   const canvas=$('shapeCanvas'), svgNS='http://www.w3.org/2000/svg';
-  const fields={name:$('partName'),x:$('partX'),y:$('partY'),width:$('partWidth'),height:$('partHeight'),angle:$('partAngle')};
+  const fields={name:$('partName'),x:$('partX'),y:$('partY'),width:$('partWidth'),height:$('partHeight'),depth:$('partDepth'),angle:$('partAngle')};
   const query='?project='+encodeURIComponent(project?.id||'');
   const toBoard=assetId=>'workbench.html'+query+'&asset='+encodeURIComponent(assetId);
   const toDraft=assetId=>'shape-studio.html'+query+'&asset='+encodeURIComponent(assetId);
@@ -15,6 +16,7 @@
   const urls=new Map();
   const uid=()=>crypto.randomUUID();
   let doc, selected=null, trace=false, gesture, busy=false, controller, comparison;
+  let triView=false, orbit={az:0.5,el:0.42}, peekDrag=null;
 
   const asset=()=>doc?.assets?.[id];
   const parts=()=>asset()?.draft?.parts||[];
@@ -55,38 +57,176 @@
     return urls.get(blobId);
   }
 
+  // ── 三视图布局（融合自结构空间原型）：正视=现有轮廓，侧视/俯视由部件深度推导 ──
+  function triLayout(){
+    const current=asset(), span=model.depthSpan(parts());
+    const depth=Math.max(span.max-span.min,Math.round(current.height*0.3),60);
+    const gap=Math.round(current.width*0.12);
+    return {gap,span,side:{x:current.width+gap,w:depth},top:{y:current.height+gap,h:depth},
+      width:current.width+gap+depth,height:current.height+gap+depth};
+  }
+  function guideLine(x1,y1,x2,y2){
+    const node=svg('line');
+    node.setAttribute('x1',x1);node.setAttribute('y1',y1);
+    node.setAttribute('x2',x2);node.setAttribute('y2',y2);
+    node.setAttribute('class','view-sep');
+    return node;
+  }
+  function viewLabel(text,x,y){
+    const node=svg('text');
+    node.setAttribute('x',x);node.setAttribute('y',y);
+    node.setAttribute('text-anchor','middle');node.setAttribute('class','view-label');
+    node.textContent=text;
+    return node;
+  }
+  function viewRect(part,mode,layout){
+    const rect=mode==='side'?model.sideRect(part):model.topRect(part);
+    const node=svg('rect');
+    if(mode==='side'){
+      node.setAttribute('x',layout.side.x+rect.x-layout.span.min);
+      node.setAttribute('y',rect.y);
+      node.setAttribute('width',rect.width);node.setAttribute('height',rect.height);
+    }else{
+      node.setAttribute('x',rect.x);
+      node.setAttribute('y',layout.top.y+rect.y-layout.span.min);
+      node.setAttribute('width',rect.width);node.setAttribute('height',rect.height);
+    }
+    node.setAttribute('class','shape-stroke');
+    node.dataset.part=part.id;
+    node.dataset.selected=String(part.id===selected);
+    node.dataset.locked=String(part.locked);
+    const title=svg('title');title.textContent=part.name;node.append(title);
+    return node;
+  }
+  function depthHandle(part,mode,layout){
+    if(part.locked||part.id!==selected) return null;
+    const size=7,node=svg('rect');
+    let hx,hy;
+    if(mode==='side'){
+      hx=layout.side.x+part.z+part.depth/2-layout.span.min;hy=part.y;
+    }else{
+      hx=part.x;hy=layout.top.y+part.z+part.depth/2-layout.span.min;
+    }
+    node.setAttribute('x',hx-size/2);node.setAttribute('y',hy-size/2);
+    node.setAttribute('width',size);node.setAttribute('height',size);node.setAttribute('rx',1.5);
+    node.setAttribute('class','shape-handle');
+    node.style.cursor=mode==='side'?'ew-resize':'ns-resize';
+    node.dataset.handle='depth-'+mode;node.dataset.part=part.id;
+    const title=svg('title');title.textContent='拖动调整厚度';node.append(title);
+    return node;
+  }
+
   function renderCanvas(){
     const current=asset();
-    measure(canvas,current);
-    $('shapeSheet').style.setProperty('--sheet-ratio',current.width+'/'+current.height);
-    canvas.replaceChildren(...parts().map(part=>{
-      const shown=gesture?.part?.id===part.id?gesture.part:part;
-      return drawPolygon(shown,{selected:part.id===selected});
-    }));
+    const layout=gesture?.layout||(triView?triLayout():null);
+    if(layout) canvas.setAttribute('viewBox','-10 -10 '+(layout.width+20)+' '+(layout.height+20));
+    else measure(canvas,current);
+    $('shapeSheet').style.setProperty('--sheet-ratio',(layout?layout.width+'/'+layout.height:current.width+'/'+current.height));
+    const shownOf=part=>gesture?.part?.id===part.id?gesture.part:part;
+    const nodes=[];
+    if(layout){
+      const {gap,span,side,top}=layout,current0=current;
+      nodes.push(guideLine(current0.width+gap/2,0,current0.width+gap/2,current0.height));
+      nodes.push(guideLine(0,current0.height+gap/2,current0.width,current0.height+gap/2));
+      for(const part of parts()){
+        const shown=shownOf(part);
+        nodes.push(drawPolygon(shown,{selected:part.id===selected}));
+        nodes.push(viewRect(shown,'side',layout),viewRect(shown,'top',layout));
+      }
+      const active=shownOf(parts().find(part=>part.id===selected)||{});
+      for(const part of [active]){
+        if(part?.id) nodes.push(depthHandle(part,'side',layout),depthHandle(part,'top',layout));
+      }
+      const spanRounded=Math.round(span.max-span.min);
+      nodes.push(viewLabel('正视 '+current0.width+'×'+current0.height,current0.width/2,current0.height+gap*0.55));
+      nodes.push(viewLabel('侧视 厚 '+spanRounded,side.x+side.w/2,current0.height+gap*0.55));
+      nodes.push(viewLabel('俯视 '+current0.width+'×'+spanRounded,current0.width/2,top.y+top.h+16));
+    }else{
+      for(const part of parts()){
+        const shown=shownOf(part);
+        nodes.push(drawPolygon(shown,{selected:part.id===selected}));
+      }
+    }
     if(gesture?.points){
       const line=svg('polyline');line.setAttribute('class','trace-line');line.setAttribute('points',pointString(gesture.points));
       canvas.append(line);
     }
-    const ref=current.draft.reference, image=$('shapeReference'), useRef=!!ref&&$('showReference').checked;
-    $('referenceToggle').hidden=!ref;
+    canvas.replaceChildren(...nodes.filter(Boolean));
+    const ref=current.draft.reference, image=$('shapeReference'), useRef=!layout&&!!ref&&$('showReference').checked;
+    $('referenceToggle').hidden=!ref||triView;
     $('shapeSheet').dataset.reference=String(useRef);
     image.hidden=!useRef;
     if(useRef) void cachedUrl(ref.blobId).then(url=>{if(url&&asset()?.draft.reference?.blobId===ref.blobId)image.src=url;});
-    $('shapeSheet').dataset.trace=String(trace);
+    $('shapeSheet').dataset.trace=String(trace&&!layout);
     $('tracePart').setAttribute('aria-pressed',String(trace));
+    renderPeek();
   }
+
+  // ── 体块预览小窗：部件包围盒挤出，与画布同步，可拖拽旋转 ──
+  const peekSvg=$('peekSvg');
+  function tint(hex,k){
+    const n=parseInt(hex.slice(1),16),c=v=>Math.round(v*k);
+    return 'rgb('+c(n>>16&255)+','+c(n>>8&255)+','+c(n&255)+')';
+  }
+  function renderPeek(){
+    const list=parts();
+    $('shapePeek').hidden=!list.length;
+    if(!list.length) return;
+    const drawn=[...list]
+      .sort((a,b)=>model.blockDepth(b,orbit.az)-model.blockDepth(a,orbit.az))
+      .map(part=>({part,faces:model.blockFaces(part,orbit.az,orbit.el)}));
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const {faces} of drawn) for(const face of faces) for(const p of face.points){
+      minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);
+      maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y);
+    }
+    if(!Number.isFinite(minX)) return;
+    const pad=Math.max(8,(maxX-minX)*0.06);
+    peekSvg.setAttribute('viewBox',(minX-pad).toFixed(1)+' '+(minY-pad).toFixed(1)+' '
+      +(maxX-minX+pad*2).toFixed(1)+' '+(maxY-minY+pad*2).toFixed(1));
+    const nodes=[];
+    for(const {part,faces} of drawn){
+      for(const face of faces){
+        const node=svg('polygon');
+        node.setAttribute('points',face.points.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' '));
+        node.setAttribute('fill',tint(part.locked?'#d9d5cb':'#ece8dc',face.shade));
+        node.setAttribute('stroke',part.id===selected?'#2f4fd8':part.locked?'#b3afa4':'#8a867b');
+        node.setAttribute('stroke-width',part.id===selected?'2':'0.75');
+        node.setAttribute('stroke-linejoin','round');
+        const title=svg('title');title.textContent=part.name;node.append(title);
+        nodes.push(node);
+      }
+    }
+    peekSvg.replaceChildren(...nodes);
+  }
+  peekSvg.onpointerdown=event=>{
+    if(event.button!==0) return;
+    peekDrag={x:event.clientX,y:event.clientY,az:orbit.az,el:orbit.el};
+    peekSvg.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+  peekSvg.onpointermove=event=>{
+    if(!peekDrag) return;
+    orbit.az=peekDrag.az+(event.clientX-peekDrag.x)*0.008;
+    orbit.el=Math.min(1.2,Math.max(-1.2,peekDrag.el+(event.clientY-peekDrag.y)*0.006));
+    renderPeek();
+  };
+  peekSvg.onpointerup=()=>{peekDrag=null;};
+  peekSvg.onpointercancel=()=>{peekDrag=null;};
 
   function updateButtons(){
     const part=active(), restricted=busy||!part||part.locked;
     $('partFields').disabled=restricted;
     for(const key of ['generateVariants','variantField','variantAmount','partAiRun','partPrompt','removePart']) $(key).disabled=restricted;
     for(const key of ['tracePart','addRectangle','addEllipse','loadExample','toggleLock']) $(key).disabled=busy;
+    $('tracePart').disabled=busy||triView;
     $('partAiCancel').hidden=!controller;
   }
 
   function renderControls(){
     const items=parts();
     $('partCount').textContent=items.length+' 个 · '+items.filter(part=>part.locked).length+' 锁定';
+    $('triToggleWrap').hidden=!items.length;
     if(!active()) selected=items.at(-1)?.id||null;
     $('shapeParts').replaceChildren(...items.map(part=>{
       const row=element('li');
@@ -111,7 +251,8 @@
       for(const [key,control] of Object.entries(fields)) control.value=part[key];
     }
     $('shapeHint').textContent=trace?'在画布沿部件边缘拖动，松开后闭合轮廓。':
-      items.length?'选中部件可拖动位置，也可以输入精确参数。虚线轮廓表示已锁定。':'添加基本形状，或用「描轮廓」沿底图勾画。';
+      triView?'正视格拖动部件；侧视格左右拖、俯视格前后拖调整深度位置；方块手柄调整厚度。':
+      items.length?'选中部件可拖动位置，也可以输入精确参数。勾选「三视图」查看侧视与俯视。':'添加基本形状，或用「描轮廓」沿底图勾画。';
     updateButtons();
   }
 
@@ -198,6 +339,10 @@
     $('shapeTitle').textContent=asset().name;
     document.title=asset().name+' · 部件推敲 · 物映';
     $('shapeDimensions').textContent=asset().width+' × '+asset().height+' px';
+    // 过期标记：结构改过之后，下游阶段的旧结果可能过期（橙点提示）
+    for(const [stage,anchor] of [['ortho',$('railOrtho')],['render',$('railRender')]]){
+      anchor.classList.toggle('is-stale',stageBook.staleOf(asset()?.flow,stage));
+    }
     renderControls();renderCanvas();renderVersions();renderAi();
   }
 
@@ -224,10 +369,17 @@
         const next=updater(draft.draft.parts,draft);
         draft.draft.parts=next;
         draft.draft.revision=uid();
+        // P0 过期标记：部件结构修订号变了，基于旧修订号生成的三视图/渲染结果标过期
+        if(draft.flow?.stages&&(draft.flow.stages.ortho||draft.flow.stages.render)){
+          const flowNext={...draft.flow,stages:{...draft.flow.stages}};
+          stageBook.markStale(flowNext,'refine');
+          draft.flow=flowNext;
+        }
         draft.updatedAt=Math.max(Date.now(),(draft.updatedAt||0)+1);
       });
     }catch(error){doc=await store.read();throw error;}
     show(message);
+    scheduleLiveShape();
   }
 
   function nextName(items){return '部件 '+(items.length+1);}
@@ -248,6 +400,11 @@
     renderControls();renderCanvas();
   };
   $('showReference').onchange=renderCanvas;
+  $('triToggle').onchange=()=>{
+    triView=$('triToggle').checked;
+    if(triView&&trace){ trace=false; $('tracePart').setAttribute('aria-pressed','false'); }
+    renderControls();renderCanvas();
+  };
   $('loadExample').onclick=()=>void task(async()=>{
     await saveDraft((items,source)=>{
       if(items.length) return items;
@@ -342,18 +499,35 @@
   function canvasPoint(event){
     const p=canvas.createSVGPoint();p.x=event.clientX;p.y=event.clientY;
     const point=p.matrixTransform(canvas.getScreenCTM().inverse());
-    return {x:Math.min(asset().width,Math.max(0,point.x)),y:Math.min(asset().height,Math.max(0,point.y))};
+    const limit=gesture?.layout||(triView?triLayout():asset());
+    return {x:Math.min(limit.width,Math.max(0,point.x)),y:Math.min(limit.height,Math.max(0,point.y))};
   }
   canvas.onpointerdown=event=>{
     if(event.button!==0||busy||gesture) return;
+    const layout=triView?triLayout():null;
     const start=canvasPoint(event);
-    if(trace){
+    if(trace&&!layout){
       gesture={id:event.pointerId,points:[start]};
     }else{
-      const part=parts().find(item=>item.id===event.target.closest('[data-part]')?.dataset.part);
-      if(!part) return;
-      selected=part.id;renderControls();
-      if(!part.locked) gesture={id:event.pointerId,start,source:part,part};
+      const handle=event.target.closest('[data-handle]');
+      if(handle){
+        const part=parts().find(item=>item.id===handle.dataset.part);
+        if(part&&!part.locked){
+          selected=part.id;renderControls();
+          gesture={id:event.pointerId,kind:'depth',mode:handle.dataset.handle==='depth-side'?'side':'top',
+            start,source:part,part,layout};
+        }
+      }else{
+        const part=parts().find(item=>item.id===event.target.closest('[data-part]')?.dataset.part);
+        if(!part) return;
+        selected=part.id;renderControls();
+        if(!part.locked){
+          if(!layout) gesture={id:event.pointerId,kind:'move',start,source:part,part,layout};
+          else if(start.x>layout.side.x) gesture={id:event.pointerId,kind:'z',axis:'x',start,source:part,part,layout};
+          else if(start.y>layout.top.y) gesture={id:event.pointerId,kind:'z',axis:'y',start,source:part,part,layout};
+          else gesture={id:event.pointerId,kind:'move',start,source:part,part,layout};
+        }
+      }
     }
     renderCanvas();
     if(gesture) canvas.setPointerCapture(event.pointerId);
@@ -364,10 +538,16 @@
     if(gesture.points){
       const last=gesture.points.at(-1);
       if(gesture.points.length<700&&Math.hypot(last.x-point.x,last.y-point.y)>.9) gesture.points.push(point);
-    }else{
+    }else if(gesture.kind==='move'){
       const {source,start}=gesture;
       const patch={x:source.x+point.x-start.x,y:source.y+point.y-start.y};
       try{gesture.part=model.updatePart([source],source.id,patch,asset())[0];}catch{}
+    }else if(gesture.kind==='z'){
+      const delta=gesture.axis==='x'?point.x-gesture.start.x:point.y-gesture.start.y;
+      gesture.part={...gesture.source,z:Math.round((gesture.source.z+delta)*100)/100};
+    }else if(gesture.kind==='depth'){
+      const delta=gesture.mode==='side'?point.x-gesture.start.x:point.y-gesture.start.y;
+      gesture.part={...gesture.source,depth:Math.max(4,Math.round((gesture.source.depth+delta)*100)/100)};
     }
     renderCanvas();
   };
@@ -381,8 +561,18 @@
         await saveDraft((items,source)=>[...items,model.tracePart(partId,nextName(items),final.points,source)],'已添加描线部件。');
         selected=partId;trace=false;
       });
-    }else if(final.part.x!==final.source.x||final.part.y!==final.source.y){
-      void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{x:final.part.x,y:final.part.y},source),'已移动 '+final.part.name+'。'));
+    }else if(final.kind==='move'){
+      if(final.part.x!==final.source.x||final.part.y!==final.source.y){
+        void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{x:final.part.x,y:final.part.y},source),'已移动 '+final.part.name+'。'));
+      }
+    }else if(final.kind==='z'){
+      if(final.part.z!==final.source.z){
+        void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{z:final.part.z},source),'已调整 '+final.part.name+' 的深度位置。'));
+      }
+    }else if(final.kind==='depth'){
+      if(final.part.depth!==final.source.depth){
+        void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{depth:final.part.depth},source),'已调整 '+final.part.name+' 的厚度。'));
+      }
     }
   };
   canvas.onpointercancel=()=>{gesture=undefined;renderCanvas();};
@@ -410,6 +600,115 @@
     });
   };
   $('partAiCancel').onclick=()=>controller?.abort();
+
+  // ── 锁定感知实时辅助：只重渲选中的未锁定部件，锁定部件像素保持不变 ──
+  // 源图始终是进入微调时的底图（draft.reference），遮罩是选中部件的最新轮廓；
+  // 渲染完把补丁合成回底图预览，所以锁定的部件永远不会被改动。
+  let liveOn=false, liveBusy=false, liveTimer, liveController, liveSeed=crypto.getRandomValues(new Uint32Array(1))[0], liveUrl='';
+  const liveParts=()=>{ const part=active(); return part&&!part.locked?{edit:part,locked:parts().filter(item=>item.locked&&item.id!==part.id)}:null; };
+  const partPoints=(part,width,height)=>model.polygon(part).map(({x,y})=>({x:x/width,y:y/height}));
+  function liveState(message,error=false){
+    $('liveState').textContent=message;
+    $('liveState').dataset.error=String(error);
+    $('liveRetry').hidden=!error;
+  }
+  function scheduleLiveShape(){
+    if(!liveOn) return;
+    clearTimeout(liveTimer);
+    liveTimer=setTimeout(()=>void renderLiveShape(),500);
+  }
+  async function renderLiveShape(){
+    if(!liveOn) return;
+    const target=liveParts(), ref=asset()?.draft?.reference, prefs=flow.modelPrefs();
+    if(!target){liveState('选中一个未锁定的部件后，调整它才会实时更新。');return;}
+    if(!ref){liveState('这份草稿没有底图，先回图像编辑出图，再「拆成部件」。',true);return;}
+    if(liveBusy){scheduleLiveShape();return;}
+    liveBusy=true;
+    $('liveToggle').disabled=true;
+    liveState('正在渲染 '+target.edit.name+'…');
+    liveController=new AbortController();
+    try{
+      const sourceBlob=await store.getBlob(ref.blobId);
+      if(!sourceBlob) throw new Error('底图丢失，无法实时预览。');
+      const size=asset();
+      const prepared=await window.WuyingImageSelection.prepare(sourceBlob,
+        partPoints(target.edit,size.width,size.height),
+        target.locked.map(part=>partPoints(part,size.width,size.height)));
+      const prompt=[
+        $('partPrompt').value.trim()||'Redraw the masked part with clean, credible product detailing.',
+        'Redraw only the masked part to match its edited outline; keep everything outside the mask pixel-identical.',
+        window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
+      ].filter(Boolean).join(' ');
+      const {blob}=await window.WuyingComfy.renderRegion({
+        endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,prompt,
+        sourceImage:prepared.sourceImage,maskImage:prepared.maskImage,
+        denoise:Number($('liveStrength').value)/100,seed:liveSeed,
+        slot:'shape-live-'+id.slice(0,8),signal:liveController.signal,onStatus:()=>{}
+      });
+      const merged=await window.WuyingImageSelection.composite(prepared,blob,{feather:8});
+      if(liveUrl) URL.revokeObjectURL(liveUrl);
+      liveUrl=URL.createObjectURL(merged);
+      $('liveImage').src=liveUrl;
+      liveState('已按最新轮廓更新 '+target.edit.name+'，锁定部件未改动。');
+    }catch(error){
+      if(liveController?.signal.aborted) liveState('已停止。');
+      else liveState('渲染失败：'+error.message,true);
+    }finally{
+      liveBusy=false;liveController=undefined;
+      $('liveToggle').disabled=busy;
+    }
+  }
+  function setLiveShape(on){
+    liveOn=on;
+    $('liveToggle').textContent=on?'关闭实时辅助':'开启实时辅助';
+    $('liveToggle').setAttribute('aria-pressed',String(on));
+    $('livePane').hidden=!on;
+    if(on){ liveSeed=crypto.getRandomValues(new Uint32Array(1))[0]; scheduleLiveShape(); }
+    else{ clearTimeout(liveTimer); liveController?.abort(); liveState('等待调整'); }
+  }
+  $('liveToggle').onclick=()=>{
+    const prefs=flow.modelPrefs();
+    if(!liveOn&&(!prefs.endpoint||!prefs.checkpoint)){show('请先在本机模型设置里连接 ComfyUI。',true);return;}
+    setLiveShape(!liveOn);
+  };
+  $('liveRetry').onclick=()=>{ $('liveRetry').hidden=true; scheduleLiveShape(); };
+  $('liveStrength').addEventListener('input',()=>{ $('liveStrengthValue').textContent=$('liveStrength').value+'%'; });
+  $('liveStrength').addEventListener('change',scheduleLiveShape);
+  $('partPrompt').addEventListener('input',scheduleLiveShape);
+
+  // ── 阶段轨道：微调完成去三视图 / 回草图（P0：前进条件 + 冻结快照）──
+  const boardQuery='?project='+encodeURIComponent(project?.id||'');
+  $('railSketch').href='image-studio.html'+boardQuery+'&asset='+encodeURIComponent(id);
+  $('railOrtho').href='image-studio.html'+boardQuery+'&asset='+encodeURIComponent(id)+'&stage=ortho';
+  $('railRender').href='image-studio.html'+boardQuery+'&asset='+encodeURIComponent(id)+'&stage=render';
+  const stepHref={sketch:$('railSketch').href,ortho:$('railOrtho').href,render:$('railRender').href};
+  async function goStage(event,stage){
+    event.preventDefault();
+    // 前进条件：离开微调至少要有 1 个部件（违规校验随 P2 约束系统补上）
+    if(stage!=='sketch'&&!parts().length){
+      show('还没有部件：先描轮廓或添加矩形、椭圆，再去下一阶段。',true);
+      return;
+    }
+    try{
+      doc=await store.change(current=>{
+        const target=current.assets[id];
+        if(!target?.flow) return;
+        const next={...target.flow,stage};
+        next.stages={...(target.flow.stages||{})};
+        // 冻结快照：离开微调时把当前结构修订号存档，三视图/渲染以它判定过期
+        if(stage!=='sketch'&&target.draft?.revision){
+          stageBook.capture(next,'refine',{revision:target.draft.revision});
+        }
+        target.flow=next;
+        target.updatedAt=Date.now();
+      });
+      location.assign(stepHref[stage]);
+    }catch(error){ show(error.message,true); }
+  }
+  for(const [stage,anchor] of [['sketch',$('railSketch')],['ortho',$('railOrtho')],['render',$('railRender')]]){
+    anchor.addEventListener('click',event=>void goStage(event,stage));
+  }
+
   window.addEventListener('pageshow',event=>{
     if(event.persisted&&store) void store.read().then(next=>{doc=next;render();}).catch(error=>show(error.message,true));
   });
@@ -423,8 +722,21 @@
       if(!store) throw new Error('找不到这个项目。');
       doc=await store.read();
       if(!asset()?.draft) throw new Error('找不到这份部件草稿。');
+      // 旧草稿迁移：部件补全厚度/深度位置（读取时一次性落盘）
+      if(model.needsNormalize(asset().draft.parts)){
+        doc=await store.change(current=>{
+          const target=current.assets[id];
+          if(target?.draft&&model.needsNormalize(target.draft.parts)){
+            target.draft.parts=model.normalizeParts(target.draft.parts);
+            target.draft.revision=uid();
+            target.updatedAt=Date.now();
+          }
+        });
+        show('已为旧草稿的部件补全厚度与深度位置。');
+      }
       $('shapeBack').href=toBoard(id);
       $('shapeImage').href=toImage(id);$('shapeImage').hidden=false;
+      $('shapeFlowRail').hidden=false;
       $('shapeProject').textContent=project.name;
       $('shapeShell').hidden=false;
       render();

@@ -674,3 +674,44 @@ test('Qwen 实时通道：分辨率越界回落 1024，取消挂起默认关闭'
   await renderQwen({ endpoint, checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp', sourceImage: sketch, seed: 2, resolution: 99999 });
   fetch.mock.restore();
 });
+
+test('scene region edits add a scribble ControlNet on the sketch guide', async (t) => {
+  const { renderRegion } = require('./dist/comfy.js');
+  const uploaded = [];
+  t.mock.method(global, 'fetch', async (url, init) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/upload/image') {
+      const data = await init.body.get('image').text();
+      uploaded.push(data);
+      return Response.json({ name: data + '.png', type: 'temp' });
+    }
+    if (pathname === '/prompt') {
+      const graph = JSON.parse(init.body).prompt;
+      const node = name => Object.entries(graph).find(([, value]) => value.class_type === name);
+      const [applyId, apply] = node('ControlNetApplyAdvanced');
+      const [, loader] = node('ControlNetLoader');
+      const [, invert] = node('ImageInvert');
+      assert.equal(loader.inputs.control_net_name, 'scribble.safetensors');
+      assert.equal(graph[invert.inputs.image[0]].inputs.image, 'sketch-guide.png [temp]');
+      assert.equal(apply.inputs.strength, 0.95);
+      const [, sampler] = node('KSampler');
+      assert.deepEqual(sampler.inputs.positive, [applyId, 0]);
+      assert.deepEqual(sampler.inputs.negative, [applyId, 1]);
+      assert.ok(node('SetLatentNoiseMask'));
+      assert.equal(Object.values(graph).filter(n => n.class_type === 'LoadImage').length, 3);
+      assert.ok(node('PreviewImage') || node('SaveImage'), '输出节点不能被覆盖');
+      return Response.json({ prompt_id: 'scene-job' });
+    }
+    if (pathname === '/history/scene-job') {
+      return Response.json({ 'scene-job': { outputs: { 11: { images: [{ filename: 'scene.png', type: 'temp' }] } } } });
+    }
+    if (pathname === '/view') return new Response(resultImage);
+    assert.fail('Unexpected route ' + pathname);
+  });
+  await renderRegion({
+    endpoint, checkpoint: 'sd15.safetensors', prompt: 'lamp on desk', denoise: 0.85, controlnet: 'scribble.safetensors', controlStrength: 0.95,
+    sourceImage: new Blob(['photo-crop'], { type: 'image/png' }), maskImage: new Blob(['mask'], { type: 'image/png' }),
+    guideImage: new Blob(['sketch-guide'], { type: 'image/png' }), slot: 'scene-test'
+  });
+  assert.deepEqual(uploaded, ['photo-crop', 'sketch-guide', 'mask']);
+});

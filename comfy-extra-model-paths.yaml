@@ -1,0 +1,25 @@
+wuying_shared:
+  base_path: D:/Comfy-Desktop/ComfyUI-Shared/models
+  checkpoints: checkpoints
+  controlnet: controlnet
+  loras: loras
+  vae: vae
+  clip: clip
+  clip_vision: clip_vision
+  text_encoders: text_encoders
+  diffusion_models: diffusion_models
+  upscale_models: upscale_models
+  embeddings: embeddings
+
+wuying_bishe:
+  base_path: D:/毕设/models
+  checkpoints: checkpoints
+  controlnet: controlnet
+  loras: loras
+  vae: vae
+  clip: clip
+  clip_vision: clip_vision
+  text_encoders: text_encoders
+  diffusion_models: diffusion_models
+  upscale_models: upscale_models
+  embeddings: embeddings

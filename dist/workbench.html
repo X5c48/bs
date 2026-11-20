@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1a1a1c">
+  <title>工作台 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="workbench.css">
+  <link rel="stylesheet" href="workspace-variation.css">
+  <script src="project-store.js" defer></script><script src="workspace-store.js" defer></script><script src="workspace-account.js" defer></script><script src="workspace-assets.js" defer></script>
+  <script src="comfy.js" defer></script><script src="image-selection.js" defer></script>
+  <script src="shape-model.js" defer></script><script src="workspace-composite.js" defer></script><script src="platform-api.js" defer></script><script src="workspace-render.js" defer></script>
+  <script src="workspace-workflow.js" defer></script><script src="workspace-video.js" defer></script><script src="workspace-variation.js" defer></script><script src="workbench.js" defer></script>
+</head>
+<body>
+  <header class="wb-header">
+    <div class="wb-identity"><a class="wb-logo" href="files.html" title="返回文件"><img src="assets/icon.svg" alt="">物映</a><span aria-hidden="true">/</span><span id="fileName"></span></div>
+    <nav class="wb-modes" aria-label="模式"><a aria-current="page" href="#">工作台</a><a id="studioMode" href="image-studio.html">图像编辑</a></nav>
+    <div class="wb-actions">
+      <button type="button" id="toggleView" aria-expanded="false" aria-controls="viewMenu">视图</button>
+      <button type="button" id="openVideo">展示视频</button><button type="button" id="openModel">模型连接</button>
+      <button type="button" id="exportSelected" disabled title="导出选中的图">导出</button>
+    </div>
+  </header>
+  <div class="wb-menu wb-view-menu" id="viewMenu" hidden>
+    <label><input type="checkbox" id="viewDetails">显示图像信息</label>
+    <label><input type="checkbox" id="viewBlocks">显示操作节点</label>
+    <label><input type="checkbox" id="viewWires">显示连线</label>
+    <hr><button type="button" id="viewFit">适应画面</button>
+  </div>
+  <main class="wb-shell" id="workbenchShell">
+    <section class="wb-workarea" aria-label="自由工作台">
+      <div class="wb-viewport" id="workspaceViewport" tabindex="0" aria-label="工作台画布。拖动空白处平移，滚轮缩放">
+        <div id="workspaceWorld" class="wb-world">
+          <svg id="workspaceWires" class="wb-wires" aria-hidden="true"></svg>
+          <div id="workspaceItems" class="wb-items"></div>
+        </div>
+        <section id="workspaceEmpty" class="wb-empty" hidden>
+          <h1>从部件草稿开始</h1>
+          <p>描出产品轮廓，锁住已定部件，再推敲其他部分。</p>
+          <div><button type="button" class="wb-primary" id="emptyDraft">新建部件草稿</button><button type="button" id="emptySketch">新建手绘</button><button type="button" id="emptyImport">导入图片</button></div>
+        </section>
+      </div>
+      <div class="wb-toolbar" role="toolbar" aria-orientation="vertical" aria-label="画布工具">
+        <button type="button" data-wb-tool="select" aria-pressed="true" title="选择 (V)" aria-label="选择"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3l10 6.5-4.4 1 2.6 5-1.8.9-2.6-5L5 15z"/></svg></button>
+        <button type="button" data-wb-tool="hand" aria-pressed="false" title="抓手 (H)" aria-label="抓手"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 9V4.5a1.2 1.2 0 012.4 0V9m0-1V3.5a1.2 1.2 0 012.4 0V9m0-.5V4.5a1.2 1.2 0 012.4 0V11c0 3.5-2 6-5.2 6-2.3 0-3.3-1-4.8-3.6L3 10.6a1.2 1.2 0 012-1.2L7 11"/></svg></button>
+        <hr>
+        <button type="button" id="toggleInsert" aria-expanded="false" aria-controls="insertMenu" title="添加 (A)" aria-label="添加"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button>
+        <button type="button" id="railUpload" title="上传图片 (I)" aria-label="上传图片"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V4M6.5 7.5L10 4l3.5 3.5M4 13v3h12v-3"/></svg></button>
+        <hr>
+        <button type="button" id="openShortcuts" title="快捷键 (?)" aria-label="快捷键">?</button>
+      </div>
+      <div class="wb-menu" id="insertMenu" hidden></div>
+      <div class="wb-menu" id="connectMenu" hidden></div>
+      <div class="wb-menu wb-context" id="contextMenu" role="menu" hidden></div>
+      <div class="wb-zoom" role="group" aria-label="缩放">
+        <button type="button" id="zoomOut" aria-label="缩小">−</button><button type="button" id="zoomFit" title="适应工作台">100%</button><button type="button" id="zoomIn" aria-label="放大">+</button>
+      </div>
+      <p id="workbenchStatus" role="status" class="wb-status"></p>
+      <input type="file" id="workbenchUpload" accept="image/png,image/jpeg,image/webp" multiple hidden>
+    </section>
+    <aside id="workspaceInspector" class="wb-inspector" aria-label="选中内容" hidden>
+      <div class="wb-inspector-head"><h2 id="inspectorTitle"></h2><button type="button" id="closeInspector" aria-label="关闭面板">×</button></div>
+      <div id="inspectorBody"></div>
+    </aside>
+  </main>
+
+  <dialog id="modelDialog" aria-labelledby="modelTitle">
+    <form class="wb-modal" id="modelForm">
+      <header><h2 id="modelTitle">出图模型</h2><button type="button" id="closeModel" aria-label="关闭">×</button></header>
+      <label for="modelProvider">出图来源</label><select id="modelProvider"><option value="runninghub">RunningHub 云端 API</option><option value="comfy">本机 ComfyUI</option><option value="imageapi">自定义图片 API</option></select>
+      <div id="cloudFields" class="wb-modal-group">
+        <label for="cloudModel">RunningHub 模型</label><select id="cloudModel"><option value="qwen-image-2.0-edit">千问 2.0 图像编辑（推荐起步）</option><option value="seedream-v4.5">Seedream 4.5 图生图</option><option value="seedream-v5-pro">Seedream V5 Pro · 稳定版</option><option value="omni-v2">全能图片 V2 · 官方稳定版</option><option value="omni-g2">全能图片 G-2 · 官方稳定版</option></select>
+        <p>在「后台管理」填写 RunningHub 密钥。</p>
+      </div>
+      <div id="imageApiFields" class="wb-modal-group" hidden>
+        <label for="modelImageApi">图片接口</label><select id="modelImageApi"></select>
+      </div>
+      <div id="comfyFields" class="wb-modal-group">
+        <label for="modelEndpoint">服务地址</label><input type="url" id="modelEndpoint">
+        <label for="modelCheckpoint">基础模型</label><select id="modelCheckpoint"></select>
+        <label for="modelControlnet">草图控形模型</label><select id="modelControlnet"></select>
+      </div>
+      <a class="wb-button" href="admin.html">后台管理</a>
+      <button type="button" id="testModel">连接并读取模型</button>
+      <p id="modelStatus" role="status"></p>
+      <button type="submit" id="saveModel" class="wb-primary" disabled>保存</button>
+    </form>
+  </dialog>
+  <dialog id="videoDialog" aria-labelledby="videoTitle">
+    <form class="wb-modal" id="videoForm">
+      <header><h2 id="videoTitle">生成展示视频</h2><button type="button" id="closeVideo" aria-label="关闭">×</button></header>
+      <label for="videoProvider">视频模型</label><select id="videoProvider"></select>
+      <label for="videoMode">输入类型</label><select id="videoMode"></select>
+      <div class="wb-modal-group" id="videoFrames">
+        <label for="videoFirst">首帧 · 已采用方案</label><select id="videoFirst"></select>
+        <label for="videoLast" id="videoLastLabel" hidden>尾帧</label><select id="videoLast" hidden></select>
+      </div>
+      <div class="wb-modal-group" id="videoAspectGroup">
+        <label for="videoAspect">画幅</label><select id="videoAspect"><option>16:9</option><option>9:16</option><option>1:1</option></select>
+      </div>
+      <div class="wb-modal-group" id="videoDurationGroup">
+        <label for="videoDuration">时长</label><select id="videoDuration"><option value="3">3 秒</option><option value="5" selected>5 秒</option><option value="8">8 秒</option><option value="10">10 秒</option></select>
+      </div>
+      <label for="videoPrompt">镜头说明</label><textarea id="videoPrompt" minLength="5" maxlength="2000" rows="3" placeholder="镜头绕产品缓慢移动，保持造型、材质与颜色"></textarea>
+      <p id="videoModelNote" class="wb-panel-copy"></p>
+      <p id="videoStatus" role="status" aria-live="polite"></p>
+      <button type="submit" class="wb-primary" id="videoRun">生成视频</button>
+      <button type="button" id="videoStop" hidden>停止查询</button>
+      <div class="wb-job-list" id="videoHistory"></div>
+    </form>
+  </dialog>
+  <dialog id="shortcutDialog" aria-labelledby="shortcutTitle">
+    <div class="wb-modal">
+      <header><h2 id="shortcutTitle">快捷键</h2><button type="button" id="closeShortcuts" aria-label="关闭">×</button></header>
+      <dl class="wb-keys">
+        <dt>V</dt><dd>选择</dd><dt>H / 按住空格</dt><dd>抓手平移</dd><dt>A</dt><dd>添加菜单</dd><dt>I</dt><dd>上传图片</dd>
+        <dt>Q</dt><dd>从选中的图接出修改节点</dd><dt>Shift + 点击</dt><dd>多选（最多 4 张）</dd>
+        <dt>Shift + 1</dt><dd>适应画面</dd><dt>Ctrl + Enter</dt><dd>在提示框里直接生成</dd>
+        <dt>右键</dt><dd>节点菜单：复制、采用、导出、删除</dd>
+        <dt>Delete</dt><dd>删除选中的节点或图</dd><dt>Esc</dt><dd>关闭菜单 / 取消选择</dd><dt>?</dt><dd>打开本表</dd>
+      </dl>
+    </div>
+  </dialog>
+  <dialog id="compareDialog" aria-labelledby="compareTitle">
+    <div class="wb-modal wb-compare">
+      <header><h2 id="compareTitle">出图对照</h2><button type="button" id="closeCompare" aria-label="关闭">×</button></header>
+      <div><figure><img id="sourceCompare" alt="生成时的源图"><figcaption>生成时的源图</figcaption></figure><figure><img id="resultCompare" alt="生成结果"><figcaption>生成结果</figcaption></figure></div>
+    </div>
+  </dialog>
+</body>
+</html>

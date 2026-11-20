@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#191919">
+  <title>Vizcom · Interaction Reference</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="lower.css">
+  <script src="app.js" defer></script>
+  <script src="lower.js" defer></script>
+</head>
+<body>
+  <header class="site-header" id="header">
+    <nav class="nav-shell" aria-label="Main">
+      <a class="wordmark" href="#top" aria-label="Back to top">vizcom</a>
+      <button class="menu-toggle" type="button" id="menuToggle" aria-expanded="false" aria-controls="menuBody">Menu</button>
+      <div class="nav-menu" id="menuBody">
+        <div id="navGroups" class="nav-groups"></div>
+        <div class="nav-account"><a href="https://app.vizcom.com/auth">Login</a><a class="btn blue" href="https://app.vizcom.com/auth">Try it out</a></div>
+      </div>
+      <div class="nav-flyout" id="navFlyout" hidden></div>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero-track" id="hero" aria-label="Make it real">
+      <div class="hero-pin">
+        <h1 class="hero-title"><img src="media/hero-title.svg" alt="Make it real"></h1>
+        <div class="hero-grid" aria-hidden="true"></div>
+        <div class="hero-reel" id="heroReel" aria-label="Design examples" tabindex="0">
+          <div class="hero-slides" id="heroSlides"></div>
+          <button type="button" class="hero-arrow hero-prev" id="heroPrev" aria-label="Previous design">←</button>
+          <button type="button" class="hero-arrow hero-next" id="heroNext" aria-label="Next design">→</button>
+        </div>
+        <form class="hero-prompt" id="heroPrompt"><label class="sr-only" for="heroInput">Render prompt</label><input id="heroInput" value="Make this car real"><button type="submit" class="purple" aria-label="Show example render">→</button></form>
+        <div class="hero-cta">
+          <p>A new way to design for the real world</p>
+          <a class="btn blue" href="https://app.vizcom.com/auth">Get Started</a>
+          <a class="btn outline" href="https://vizcom.com/contact">Book a Demo</a>
+        </div>
+        <a href="#toolkit" class="hero-scroll">Scroll <span aria-hidden="true">↓</span></a>
+      </div>
+    </section>
+
+    <section class="brands" aria-label="Brands">
+      <p>Bringing ideas to life for world-class brands</p>
+      <div class="marquee" id="marquee"></div>
+    </section>
+
+    <section class="toolkit" id="toolkit">
+      <header class="toolkit-heading">
+        <h2>Your ideation toolkit</h2>
+        <p>Follow a sketch through rendering, color exploration and a product video.</p>
+        <div><a class="btn blue" href="https://vizcom.com/product">Learn more</a><a class="btn outline" href="https://app.vizcom.com/auth">Get Started</a></div>
+      </header>
+
+      <div class="story" id="story" data-step="0">
+        <div class="story-pin" id="storyPin">
+          <div class="stages" role="tablist" aria-label="Design workflow">
+            <button type="button" role="tab" aria-selected="true" aria-controls="studioScene" data-step-button="0">Sketch</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="studioScene" data-step-button="1">Render</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="iterateScene" data-step-button="2">Iterate</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="realScene" data-step-button="3">Make it real</button>
+          </div>
+
+          <div class="story-scene studio-scene" id="studioScene">
+            <aside class="panel layer-panel" aria-label="Layers and assets">
+              <div class="panel-head layer-head"><button id="tabLayers" type="button" aria-pressed="true">Layers</button><button id="tabAssets" type="button" aria-pressed="false">Assets</button></div>
+              <div id="layerList"></div>
+            </aside>
+            <figure class="shoe-board">
+              <img id="shoeBase" src="media/layer-4.webp" alt="Footwear design on the canvas">
+              <img id="shoeReveal" src="media/layer-4.webp" alt="" hidden>
+              <span class="canvas-cue">Scroll</span>
+            </figure>
+            <aside class="modify-side" aria-label="Render tools">
+              <div class="panel modify-panel">
+                <div class="panel-head">⌄　Modify</div>
+                <div class="modify-body">
+                  <div class="smallrow"><strong>Prompt</strong><button type="button" id="resetPrompt">Reset</button></div>
+                  <form class="prompt-box" id="renderDemo">
+                    <label class="sr-only" for="renderPrompt">Prompt</label><textarea id="renderPrompt" rows="3" placeholder="Describe your design’s form, proportions, colors, and materials"></textarea>
+                    <div class="prompt-actions"><button type="button" id="examplePrompt" title="Use a sample prompt">◇</button><button class="purple" type="submit" aria-label="Play the render example">→</button></div>
+                  </form>
+                  <div class="verbs" id="verbs">
+                    <button type="button">Change…</button><button type="button">Make…</button><button type="button">Remove…</button><button type="button">Add…</button><button type="button">Imagine…</button>
+                  </div>
+                  <label class="mode-select">Mode<select id="renderMode"><option>Pro</option><option>Standard</option></select></label>
+                  <div class="modify-actions"><strong>Actions</strong><a href="#new-view">♧　New view</a><button type="button" id="showVariations">♢　Variate form and color</button></div>
+                </div>
+              </div>
+              <div class="panel results-panel" id="resultPanel" hidden>
+                <div class="panel-head">›　Results</div>
+                <div class="result-progress"><output id="resultCount">0/4</output><progress id="resultProgress" max="4" value="0"></progress></div>
+                <div id="resultTiles" class="result-tiles"></div>
+              </div>
+            </aside>
+          </div>
+
+          <div class="story-scene iterate-scene" id="iterateScene" hidden>
+            <div class="iterate-source"><img src="media/layer-4.webp" alt="Source shoe render"></div>
+            <div class="panel variation-block">
+              <div class="panel-head">♢　Variation</div>
+              <div class="variation-body">
+                <div class="seg" id="variationModes"><button type="button" aria-pressed="false">Form</button><button type="button" aria-pressed="true">Color</button></div>
+                <p>Color Palette</p><div class="variation-swatches" aria-label="Sample palette"><b></b><b></b><b></b><b></b><b></b></div>
+                <button class="purple" type="button" id="generateVariations">Generate</button>
+              </div>
+            </div>
+            <div id="variantWall" class="variant-wall" aria-label="Sample color variations"></div>
+          </div>
+
+          <div class="story-scene real-scene" id="realScene" hidden>
+            <div class="real-gallery" id="realGallery" aria-hidden="true"></div>
+            <figure class="chosen"><img id="chosenImage" src="media/final.webp" alt="Selected colorway"></figure>
+            <form class="panel animate-panel" id="shoeAnimate">
+              <div class="panel-head">Animate</div>
+              <div class="animate-body">
+                <label>Type <select><option>Standard</option><option>Turbo</option></select></label>
+                <label>Duration <select><option>10 seconds</option><option>5 seconds</option></select></label>
+                <label>Prompt <textarea rows="3" placeholder="Show a person wearing this"></textarea></label>
+                <button type="submit" class="purple">Animate</button>
+                <small>Plays the source demo clip</small>
+              </div>
+            </form>
+            <div class="motion-preview" id="motionPreview">
+              <video id="shoeVideo" src="media/shoe-walk.mp4" muted playsinline loop preload="none" aria-label="Original footwear animation"></video>
+              <button type="button" id="expandVideo" aria-label="Open animation">↗</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="demo-note">Interactive reference · original sample assets · preset results</p>
+    </section>
+
+    <section class="playground" id="playground">
+      <header><h2>Instantly iterate and explore</h2><p>Try the controls on the same chair.</p></header>
+      <div class="play-layout">
+        <div class="play-col left-col">
+          <form class="panel playground-card" id="chairAnimate">
+            <div class="play-head"><strong>Animate</strong><span>Describe</span></div>
+            <textarea aria-label="Animation prompt" rows="3">Make the chair lift into midair and spin around</textarea>
+            <button type="submit" class="purple">Generate</button>
+          </form>
+          <div class="panel playground-card"><div class="play-head"><strong>Palette</strong><span>Change</span></div><div id="chairPalette" class="texture-list"></div></div>
+          <div class="panel playground-card form-card">
+            <div class="seg" id="chairModes"><button type="button" aria-pressed="false">Color</button><button type="button" aria-pressed="true">Form</button><button type="button" aria-pressed="false">Style</button></div>
+            <div class="form-pad" id="formPad" tabindex="0" aria-label="Variation pad. Use the arrow keys to move the point."><span>Complex</span><span>Simple</span><i></i></div>
+          </div>
+        </div>
+        <figure class="chair-preview" aria-label="Chair preview">
+          <img id="chairImage" src="media/chair-0.webp" alt="Red chair sample">
+          <video id="chairVideo" src="media/chair-motion.mp4" muted playsinline preload="none" hidden></video>
+          <button type="button" id="resetChair" aria-label="Restore original chair">↺</button>
+        </figure>
+        <div class="play-col right-col">
+          <div class="panel playground-card"><div class="play-head"><strong>Color</strong><span>Change</span></div><div class="chair-colors" id="chairColors"></div></div>
+          <div class="panel playground-card"><div class="play-head"><strong>Change expression</strong><span>Emote</span></div><div class="dial"><output id="moodLabel">Happy</output><input id="chairMood" aria-label="Form expression" type="range" min="0" max="5" value="1"></div></div>
+          <div class="panel playground-card" id="new-view"><div class="play-head"><strong>New View</strong><span>3D rotate</span></div><div class="cube-view" aria-hidden="true">◇</div><label class="sr-only" for="chairAngle">View angle</label><select id="chairAngle"></select></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="referenceLower"></div>
+  </main>
+
+  <dialog id="videoDialog" aria-label="Footwear animation">
+    <div class="video-head"><span>Make it real</span><button type="button" id="closeVideo" aria-label="Close animation">×</button></div>
+    <video src="media/shoe-walk.mp4" id="fullVideo" muted playsinline controls preload="none"></video>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>物映 · 出图管理</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/admin.js" defer></script>
+</head>
+<body>
+  <header><div class="brand"><span aria-hidden="true">物</span><strong>物映 <small>出图管理</small></strong></div><a href="http://127.0.0.1:8881/">返回工作台 ↗</a></header>
+  <main>
+    <div class="intro"><div><p class="kicker">WUYING / IMAGE API</p><h1>出图管理</h1><p>配置图片接口，再从工作台手动生成设计效果图。</p></div><span class="badge" id="adminState" role="status">正在读取配置</span></div>
+    <div class="columns">
+      <section aria-labelledby="configTitle">
+        <div class="section-head"><span>01</span><h2 id="configTitle">接口配置</h2></div>
+        <form id="configForm">
+          <label>API 地址<input id="baseUrl" type="url" required maxlength="512" placeholder="https://api.example.com/v1" spellcheck="false"><small>填服务商给的 Base URL，通常以 /v1 结尾。</small></label>
+          <label>模型 ID<input id="model" required maxlength="180" placeholder="填服务商提供的模型 ID" spellcheck="false"></label>
+          <label>API 密钥<input id="key" type="password" maxlength="2048" autocomplete="new-password" placeholder="填服务商提供的密钥"><small id="keyHint">密钥只保存在运行中的本机后台。</small></label>
+          <div class="fields">
+            <label>出图方式<select id="inputMode"><option value="edit">文字和参考图</option><option value="text">仅文生图</option></select></label>
+            <label>尺寸（可选）<input id="size" placeholder="由模型决定" maxlength="11" pattern="[0-9]{2,5}x[0-9]{2,5}"></label>
+          </div>
+          <div class="actions"><button class="primary" type="submit">保存配置</button><button type="button" id="testConnection" disabled>测试连接</button><button type="button" id="clearKey" disabled>清除密钥</button></div>
+        </form>
+        <p class="feedback" id="configStatus" role="status"></p>
+      </section>
+      <section aria-labelledby="testTitle">
+        <div class="section-head"><span>02</span><h2 id="testTitle">试出一张</h2></div>
+        <form id="renderForm">
+          <label>出图提示<textarea id="testPrompt" rows="3" required maxlength="4000">简洁的苔绿色便携产品，哑光外壳，柔和棚拍灯光，浅灰背景。</textarea></label>
+          <label id="imageField">参考图（可选）<input id="testImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          <div class="actions"><button class="primary" id="testRender" type="submit" disabled>生成测试图</button><span class="muted">试出图会使用接口额度。</span></div>
+        </form>
+        <p class="feedback" id="renderStatus" role="status"></p>
+        <div class="result"><span id="emptyImage">测试图会显示在这里</span><img id="outputImage" alt="出图接口生成的测试图" hidden></div>
+      </section>
+    </div>
+    <footer>保存后，在工作台打开「连接 AI」，选「通过出图后台」，再点「连接出图后台」。用 RunningHub 时见下方 04，然后在工作台「出图模型」里选 RunningHub。</footer>
+    <section class="concept-settings" id="conceptSettings" aria-labelledby="conceptTitle">
+      <div class="section-head"><span>03</span><h2 id="conceptTitle">设计智能体 · 文字模型</h2></div>
+      <p class="muted">配置支持 Chat Completions 的文字模型，用于根据设计简报提出造型方向。</p>
+      <form id="conceptConfigForm">
+        <div class="concept-fields">
+          <label>文字 API 地址<input id="conceptBaseUrl" type="url" required maxlength="512" placeholder="https://api.example.com/v1" spellcheck="false"></label>
+          <label>文字模型 ID<input id="conceptModel" required maxlength="180" placeholder="填服务商提供的模型 ID" spellcheck="false"></label>
+          <label>文字 API 密钥<input id="conceptKey" type="password" maxlength="2048" autocomplete="new-password" placeholder="填文字接口密钥"></label>
+        </div>
+        <small id="conceptKeyHint">文字模型配置保存在运行中的本机后台，重启后需重新填写。</small>
+        <div class="actions"><button class="primary" type="submit">保存文字模型配置</button><button type="button" id="clearConceptKey" disabled>清除文字密钥</button></div>
+      </form>
+      <p class="feedback" id="conceptConfigStatus" role="status"></p>
+    </section>
+    <section class="concept-settings" id="hubSettings" aria-labelledby="hubTitle">
+      <div class="section-head"><span>04</span><h2 id="hubTitle">RunningHub · 云端出图</h2></div>
+      <p class="muted">标准模型 API 只接受「企业级-共享」API Key（RunningHub 控制台 → API 调用）。密钥只留在本机后台，重启后需重新填写，也可用环境变量 WUYING_RUNNINGHUB_KEY 预置。</p>
+      <form id="hubForm">
+        <label>RunningHub API Key<input id="hubKey" type="password" maxlength="512" autocomplete="new-password" placeholder="粘贴企业级-共享 API Key" spellcheck="false"><small id="hubKeyHint">尚未填写密钥。</small></label>
+        <div class="actions"><button class="primary" type="submit">保存密钥</button><button type="button" id="hubTest" disabled>测试并查看余额</button><button type="button" id="hubClear" disabled>清除密钥</button></div>
+      </form>
+      <p class="feedback" id="hubStatus" role="status"></p>
+      <p class="muted" id="hubModels"></p>
+    </section>
+  </main>
+</body>
+</html>

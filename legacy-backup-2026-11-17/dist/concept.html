@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f4ee">
+  <title>概念探索 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="concept-desk.css">
+  <script src="project-store.js" defer></script>
+  <script src="sketch-rules.js" defer></script>
+  <script src="concept-geometry.js" defer></script>
+  <script src="concept.js" defer></script>
+</head>
+<body class="concept-app concept-desk">
+  <header class="app-topbar">
+    <a class="wordmark" href="projects.html" aria-label="物映项目首页">
+      <img src="assets/icon.svg" width="28" height="28" alt="">
+      <span>物映</span>
+    </a>
+    <span class="topbar-label" aria-current="page">概念探索</span>
+    <nav class="topbar-links" aria-label="项目视图">
+      <a href="projects.html">我的项目</a>
+      <a id="image-board-link" href="image-board.html" hidden>方案画布</a>
+      <a id="presentation-link" href="presentation.html" hidden>方案展示 <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main class="concept-main">
+    <section id="unavailable-project" class="project-empty" hidden>
+      <div>
+        <h1>找不到这个项目</h1>
+        <p>从项目列表打开已有作品，或新建项目。</p>
+        <a class="secondary-button" href="projects.html">返回项目</a>
+      </div>
+    </section>
+
+    <div id="concept-workspace" hidden>
+      <header class="concept-heading">
+        <div>
+          <p class="section-label">产品概念</p>
+          <h1 id="concept-project-name"></h1>
+        </div>
+        <a class="secondary-button" id="manual-editor" href="index.html">手动进画板 <span aria-hidden="true">↗</span></a>
+      </header>
+
+      <div class="concept-layout">
+        <aside class="brief-column" aria-label="项目简报与资料">
+          <header class="column-heading">
+            <div>
+              <p class="section-label">01</p>
+              <h2>设计简报</h2>
+            </div>
+            <span class="muted" id="brief-save-status" role="status"></span>
+          </header>
+          <form id="brief-form">
+            <div class="field">
+              <label for="brief-product">设计什么</label>
+              <input id="brief-product" name="product" required maxlength="140" placeholder="例如 便携阅读灯">
+            </div>
+            <div class="field">
+              <label for="brief-scenario">使用者与场景</label>
+              <textarea id="brief-scenario" name="scenario" rows="2" maxlength="320" required placeholder="例如 夜里在床边阅读的住校学生"></textarea>
+            </div>
+            <div class="field">
+              <label for="brief-goal">希望解决的问题</label>
+              <textarea id="brief-goal" name="goal" rows="2" maxlength="320" required placeholder="例如 照亮书页，减少对室友的干扰"></textarea>
+            </div>
+            <div class="field">
+              <label for="brief-constraints">必须满足的条件 <span>选填</span></label>
+              <textarea id="brief-constraints" name="constraints" rows="2" maxlength="460" placeholder="例如 单手可调、可收入小包"></textarea>
+            </div>
+            <div class="field">
+              <label for="brief-referenceNotes">参考说明 <span>选填</span></label>
+              <textarea id="brief-referenceNotes" name="referenceNotes" rows="2" maxlength="460" placeholder="用一句话写下想借鉴的形态或结构"></textarea>
+            </div>
+            <button type="submit" class="primary-button review-button" id="review-summary">核对发送内容 <span aria-hidden="true">→</span></button>
+          </form>
+
+          <div class="brief-extras">
+            <details class="desk-detail">
+              <summary>参考图片 <span class="muted">本地</span></summary>
+              <p>图片只在本机展示。可把希望助手参考的部分写进「参考说明」。</p>
+              <div id="reference-preview" class="reference-preview" hidden>
+                <img id="reference-image" alt="项目参考图">
+                <div><span id="reference-name"></span><button class="text-button" type="button" id="reference-remove">移除</button></div>
+              </div>
+              <label class="file-label" for="reference-input">选择图片</label>
+              <input id="reference-input" type="file" accept="image/png,image/jpeg,image/webp">
+              <p id="reference-status" class="status-message" role="status" hidden></p>
+            </details>
+
+            <details class="desk-detail">
+              <summary>本地笔记与偏好</summary>
+              <form id="project-note-form" class="small-form">
+                <label for="project-note">记录设计判断</label>
+                <textarea id="project-note" maxlength="500" rows="2" placeholder="记下一个取舍或下一次要试的改法"></textarea>
+                <button class="secondary-button" type="submit">添加笔记</button>
+              </form>
+              <ul id="project-notes" class="project-notes"></ul>
+              <form id="preferences-form" class="small-form preferences-form">
+                <label for="preferences-text">项目偏好</label>
+                <textarea id="preferences-text" maxlength="240" rows="2" placeholder="例如 适合注塑成型，少用外露紧固件"></textarea>
+                <label class="check-label"><input id="preferences-enabled" type="checkbox"> 下次生成时附上这段偏好</label>
+                <button class="secondary-button" type="submit">保存偏好</button>
+              </form>
+              <p id="notes-status" class="status-message" role="status" hidden></p>
+            </details>
+          </div>
+        </aside>
+
+        <div class="exploration-column">
+          <section class="request-review" id="request-review" aria-labelledby="review-title" hidden>
+            <div class="column-heading">
+              <div>
+                <p class="section-label">设计助手</p>
+                <h2 id="review-title" tabindex="-1">核对后发送</h2>
+              </div>
+              <button type="button" class="text-button" id="edit-summary">返回修改</button>
+            </div>
+            <p class="muted review-intro">下面是本次会发给模型的文字。首次使用请先<a href="http://127.0.0.1:8882/admin/#conceptSettings" target="_blank" rel="noopener">配置文本模型</a>。</p>
+            <dl id="review-fields" class="review-fields"></dl>
+            <button type="button" class="primary-button" id="generate-concepts">生成三条方向 <span aria-hidden="true">→</span></button>
+          </section>
+
+          <section id="directions" aria-labelledby="directions-title">
+            <header class="column-heading exploration-heading">
+              <div>
+                <p class="section-label">02</p>
+                <h2 id="directions-title">造型方向</h2>
+              </div>
+              <span class="muted" id="direction-count">待探索</span>
+            </header>
+            <p id="generation-status" class="status-message" role="status" hidden></p>
+            <div id="direction-loading" class="directions-grid direction-loading" aria-hidden="true" hidden><span></span><span></span><span></span></div>
+            <div class="direction-empty" id="directions-empty">
+              <div class="blank-sheet" aria-hidden="true"><span></span><span></span><span></span></div>
+              <h3>一份简报，三条方向</h3>
+              <p>同一个需求可以有不同的轮廓、比例和部件布局。生成后可选两条并排比较，再把合适的一条带进画板。</p>
+            </div>
+            <div id="directions-list" class="directions-grid"></div>
+          </section>
+
+          <section id="comparison" class="comparison" aria-labelledby="comparison-title" hidden>
+            <header class="column-heading">
+              <div>
+                <p class="section-label">03</p>
+                <h2 id="comparison-title">并排对照</h2>
+              </div>
+              <button id="clear-comparison" class="text-button" type="button">清空对比</button>
+            </header>
+            <p class="muted">同一画幅下看轮廓、部件位置和各自的取舍。</p>
+            <div id="comparison-list" class="comparison-grid"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+  <footer class="project-footer"><span>物映 · 产品概念设计</span><span>草图和参考图保存在此浏览器</span></footer>
+</body>
+</html>

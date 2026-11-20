@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f4ee">
+  <title>项目 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="concept-desk.css">
+  <script src="project-store.js" defer></script>
+  <script src="sketch-rules.js" defer></script>
+  <script src="projects.js" defer></script>
+</head>
+<body class="concept-app">
+  <header class="app-topbar">
+    <a class="wordmark" href="projects.html" aria-label="物映项目首页">
+      <img src="assets/icon.svg" width="28" height="28" alt="">
+      <span>物映</span>
+    </a>
+    <span class="topbar-label" aria-current="page">项目</span>
+    <nav class="topbar-links" aria-label="其他入口">
+      <a href="index.html?demo=1">查看示例</a>
+      <a href="index.html?project=legacy">原有工作台</a>
+    </nav>
+  </header>
+  <main class="projects-main">
+    <header class="projects-heading">
+      <div>
+        <p class="section-label">概念工作台</p>
+        <h1>我的项目</h1>
+        <p class="lede">从一个产品想法开始，比较方向，再把选中的方案画下去。</p>
+      </div>
+      <button class="primary-button" type="button" id="new-project-toggle" aria-controls="new-project-form" aria-expanded="false">
+        <span aria-hidden="true">＋</span> 新建项目
+      </button>
+    </header>
+
+    <form id="new-project-form" class="project-create" hidden>
+      <label for="project-name">项目名称</label>
+      <div class="input-action">
+        <input id="project-name" name="name" maxlength="80" required autocomplete="off" placeholder="例如 便携阅读灯">
+        <button class="primary-button" type="submit">创建设计项目</button>
+        <button class="plain-button" type="button" id="new-project-cancel">取消</button>
+      </div>
+    </form>
+    <p id="project-status" class="status-message" role="status" hidden></p>
+
+    <section class="project-empty" id="project-empty" hidden aria-labelledby="empty-title">
+      <div>
+        <h2 id="empty-title">每个项目从一份简报开始</h2>
+        <p>先写清你要设计什么、谁会使用，以及什么条件必须满足。</p>
+        <button class="secondary-button" type="button" id="empty-create">写第一份简报 <span aria-hidden="true">↗</span></button>
+      </div>
+      <ol class="empty-workflow">
+        <li><span>01</span><strong>简报</strong><small>写需求，放参考</small></li>
+        <li><span>02</span><strong>探索</strong><small>看三条造型方向</small></li>
+        <li><span>03</span><strong>推演</strong><small>继续画，选图展示</small></li>
+      </ol>
+    </section>
+
+    <section id="project-section" aria-labelledby="project-list-title" hidden>
+      <div class="section-heading">
+        <h2 id="project-list-title">最近编辑</h2>
+        <span id="project-count" class="muted"></span>
+      </div>
+      <div class="project-grid" id="project-list"></div>
+    </section>
+  </main>
+  <footer class="project-footer"><span>物映 · 产品概念设计</span><span>保存在此浏览器</span></footer>
+</body>
+</html>

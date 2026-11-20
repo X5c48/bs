@@ -1,0 +1,197 @@
+/* The paired editor shares the drawing and generation state with the node canvas. */
+.desk-strength { display: none; }
+
+.drawing-desk[data-view=board] {
+  --room:#eef0ee; --surface:#fcfcfb; --soft:#f0f2f0; --soft-hover:#e6eae7;
+  --ink:#202826; --muted:#4d5955; --quiet:#57635f;
+  --line:#d3dad6; --line-strong:#aebbb4; --accent:#224f43; --accent-strong:#285647;
+  --accent-soft:#e0ece5; --accent-line:#a8beb0; --success:#247151; --paper:#fdfdfc;
+  --desk-grid:#c9d1cd66; --desk-gap:12px;
+  color-scheme:light;
+  grid-template-rows:54px minmax(0,1fr);
+}
+.drawing-desk[data-view=board] .topbar { background:#fcfcfb; border-bottom:1px solid var(--line); }
+.drawing-desk[data-view=board] .brand { gap:9px; padding-inline:18px; }
+.drawing-desk[data-view=board] .brand-mark { background:var(--accent-soft); color:var(--accent); border-color:#c6d9cd; }
+.drawing-desk[data-view=board] .brand strong, .drawing-desk[data-view=board] .brand span { color:var(--ink); }
+.drawing-desk[data-view=board] .workbench-switch { background:#f0f2f0; }
+.drawing-desk[data-view=board] .workbench-switch button[aria-pressed=true] { background:#fff; color:var(--accent); box-shadow:0 1px 3px #22352d18; }
+.drawing-desk[data-view=board] .top-actions { padding-inline:16px; }
+.drawing-desk[data-view=board] .top-actions .preview-link { color:var(--muted); }
+.drawing-desk[data-view=board] .top-actions .preview-link:hover { color:var(--ink); }
+.drawing-desk[data-view=board] .btn-ghost { color:var(--ink); }
+.drawing-desk[data-view=board] #export { background:var(--surface); }
+.drawing-desk[data-view=board] #export:hover:not(:disabled) { background:var(--soft-hover); }
+.drawing-desk[data-view=board] :is(.btn-primary,.workbench-primary,.flow-primary,.graph-hd) {
+  background:var(--accent); color:#fff; border-color:var(--accent);
+}
+.drawing-desk[data-view=board] :is(.btn-primary,.workbench-primary,.flow-primary,.graph-hd):hover:not(:disabled) {
+  background:#2c6352; color:#fff; border-color:#2c6352;
+}
+.drawing-desk[data-view=board] :is(button,a,summary,input,select):focus-visible { outline:2px solid #326857; outline-offset:2px; }
+
+.drawing-desk[data-view=board] .workspace {
+  padding-inline:clamp(14px,2.6vw,40px);
+  background-color:var(--room);
+  background-image:linear-gradient(90deg,var(--desk-grid) 1px,transparent 1px),linear-gradient(var(--desk-grid) 1px,transparent 1px);
+  background-size:24px 24px;
+}
+.drawing-desk[data-view=board] .center {
+  grid-template-columns:minmax(0,1fr) auto;
+  grid-template-rows:42px minmax(0,1fr) auto auto;
+  gap:8px var(--desk-gap);
+  padding-block:8px 12px;
+}
+.drawing-desk[data-view=board] .center .canvas-toolbar { display:contents; }
+.drawing-desk[data-view=board] .workbench-heading {
+  position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap;
+}
+.drawing-desk[data-view=board] .center > .statusbar { display:none; }
+.drawing-desk[data-view=board] .center .canvas-toolbar .workflow-rail {
+  grid-area:1 / 1; justify-self:start; width:auto; gap:2px; display:flex;
+  padding:3px; border:1px solid var(--line); border-radius:7px; background:var(--surface);
+}
+.drawing-desk[data-view=board] .workflow-rail button { padding:0 12px; min-height:31px; font-size:12px; border-radius:4px; }
+.drawing-desk[data-view=board] .workflow-rail button small, .drawing-desk[data-view=board] .workflow-rail button::before, .drawing-desk[data-view=board] .workflow-rail button::after { display:none; }
+.drawing-desk[data-view=board] .workflow-rail button[aria-selected=true] { background:var(--accent-soft); color:var(--accent); font-weight:650; }
+.drawing-desk[data-view=board] .workbench-actions { grid-area:1 / 2; z-index:4; gap:5px; }
+.drawing-desk[data-view=board] .workbench-button { min-height:33px; padding-inline:8px; font-size:11px; }
+.drawing-desk[data-view=board] .toolbar-actions { display:flex; gap:4px; }
+.drawing-desk[data-view=board] .toolbar-actions .icon-btn { width:32px; height:32px; flex-basis:32px; color:var(--ink); }
+.drawing-desk[data-view=board] .toolbar-actions .icon-btn:disabled { color:#829087; }
+.drawing-desk[data-view=board] .node-menu { box-shadow:0 9px 25px #162d2424; }
+
+.drawing-desk[data-view=board] #nodeGraph { grid-area:2 / 1 / auto / -1; gap:6px; }
+.drawing-desk[data-view=board] #nodeGraph .graph-items { gap:var(--desk-gap); padding-left:47px; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node {
+  grid-template-rows:39px minmax(0,1fr) auto; border:1px solid var(--line);
+  border-radius:9px; box-shadow:0 4px 14px #182e2410;
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-node-head {
+  grid-template-columns:minmax(0,1fr) auto auto; padding-inline:10px; gap:7px;
+  background:var(--surface); border-bottom:1px solid var(--line); border-radius:8px 8px 0 0;
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-node-symbol { display:none; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-title {
+  display:flex; gap:8px; align-items:center; overflow:hidden; white-space:nowrap;
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-node-title strong { flex:none; font-size:13px; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-title small { color:var(--quiet); margin:0; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-state { color:var(--muted); }
+.drawing-desk[data-view=board] #nodeGraph .graph-node[data-connected=true] .graph-node-state::before { background:var(--success); }
+.drawing-desk[data-view=board] #nodeGraph .graph-node[data-node-kind=sketch].is-active::after {
+  top:18px; width:var(--desk-gap); height:1px; background:#a7b8af; animation:none;
+}
+.drawing-desk[data-view=board] #nodeGraph[data-live-gesture=true] .graph-node[data-node-kind=sketch].is-active::after { background:var(--accent); }
+.drawing-desk[data-view=board] #nodeGraph .graph-node[data-node-kind=preview][data-connected=true] { border-color:var(--line); }
+.drawing-desk[data-view=board] #nodeGraph[data-live-gesture=true] .graph-node[data-node-kind=preview].is-active { border-color:#7ca68f; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-foot {
+  min-height:42px; gap:4px; padding:4px 8px; border-top:1px solid var(--line); color:var(--muted);
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-control, .drawing-desk[data-view=board] #nodeGraph .graph-import { min-height:30px; font-size:11px; }
+.drawing-desk[data-view=board] #nodeGraph :is(.graph-control,.graph-import):not(.graph-hd) {
+  border-color:var(--line); background:var(--surface); color:var(--ink);
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-auto[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); border-color:var(--accent-line); }
+.drawing-desk[data-view=board] #nodeGraph .graph-tone-strip:not([hidden]) { gap:4px; }
+.drawing-desk[data-view=board] .graph-tone::before { border-color:#a0aaa3; }
+.drawing-desk[data-view=board] #nodeGraph .graph-tone[aria-pressed=true] { border-color:var(--accent); background:var(--accent-soft); }
+
+.drawing-desk[data-view=board] #nodeGraph .graph-sketch-tools {
+  position:absolute; z-index:3; top:50%; left:-48px; translate:0 -50%; margin:0;
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-sketch-tools .wb-toolbar {
+  display:flex; flex-flow:column nowrap; align-items:center; gap:3px; min-height:0;
+  padding:3px; border-radius:8px; border-color:var(--line); background:var(--surface); box-shadow:0 4px 12px #1d342315;
+}
+.drawing-desk[data-view=board] #nodeGraph .wb-toolbar button[data-board-tool] {
+  display:grid; place-items:center; width:34px; min-height:34px; padding:0; border-radius:5px; color:var(--muted);
+}
+.drawing-desk[data-view=board] #nodeGraph .wb-toolbar button[data-board-tool] span { display:none; }
+.drawing-desk[data-view=board] #nodeGraph .wb-toolbar button[data-board-tool] svg { width:17px; height:17px; }
+.drawing-desk[data-view=board] #nodeGraph .wb-toolbar button.is-active { background:var(--accent-soft); color:var(--accent); }
+.drawing-desk[data-view=board] #nodeGraph .wb-toolbar :is([data-board-action],.wb-toolbar-divider) { display:none; }
+.drawing-desk[data-view=board] #nodeGraph .graph-brush-settings { margin-left:auto; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-foot .studio-inks {
+  display:flex; align-items:center; gap:3px; margin:0; color:var(--muted);
+}
+.drawing-desk[data-view=board] #nodeGraph .graph-node-foot .studio-inks::before { content:"笔色"; font-size:11px; margin-right:4px; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-foot .studio-inks button { width:25px; min-height:27px; border-color:transparent; }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-foot .studio-inks button[aria-pressed=true] { border-color:var(--accent-line); }
+.drawing-desk[data-view=board] #nodeGraph .graph-node-foot .studio-inks button b { width:13px; height:13px; border-color:#a0aaa3; }
+
+.drawing-desk[data-view=board] .wb-board { background-color:var(--paper); background-image:radial-gradient(#b1beb44d .56px,transparent .68px); background-size:16px 16px; }
+.drawing-desk[data-view=board] .studio-output-stage, .drawing-desk[data-view=board] .studio-visual > img { background:#e7e9e6; }
+.drawing-desk[data-view=board] .sketch-views, .drawing-desk[data-view=board] .sketch-rotation summary, .drawing-desk[data-view=board] .sketch-rotation-controls,
+.drawing-desk[data-view=board] .viewport-tools, .drawing-desk[data-view=board] .studio-view-badge { background:#fffffff2; color:var(--ink); border-color:var(--line); }
+.drawing-desk[data-view=board] .sketch-views button[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); border-color:var(--accent-line); }
+.drawing-desk[data-view=board] .studio-ai-label {
+  background:#fffffff2; color:var(--ink); border-color:var(--line); box-shadow:0 2px 8px #26352d12;
+}
+.drawing-desk[data-view=board] .studio-ai-label b { background:var(--success); }
+.drawing-desk[data-view=board] .studio-ai-label[data-error=true] { color:#8a372a; border-color:#d9a79e; }
+.drawing-desk[data-view=board] #nodeGraph .workbench-strip { min-height:19px; padding:0 2px 0 47px; border:0; background:none; }
+.drawing-desk[data-view=board] #nodeGraph .graph-count { display:none; }
+
+.drawing-desk[data-view=board] .center .canvas-toolbar .live-prompt-dock {
+  grid-area:3 / 1; padding:5px 7px; gap:7px; min-width:0; border-radius:7px;
+  border:1px solid var(--line); background:var(--surface); color:var(--muted); align-self:center;
+}
+.drawing-desk[data-view=board] .live-prompt-dock > #renderPrompt { min-width:0; background:var(--surface); color:var(--ink); border-color:var(--line); }
+.drawing-desk[data-view=board] .live-prompt-dock > #renderPrompt::placeholder { color:var(--quiet); }
+.drawing-desk[data-view=board] .desk-strength:not([hidden]) { display:flex; align-items:center; gap:4px; font-size:11px; }
+.drawing-desk[data-view=board] .desk-strength input { width:65px; accent-color:var(--accent); }
+.drawing-desk[data-view=board] .desk-strength output { min-width:24px; font-variant-numeric:tabular-nums; }
+.drawing-desk[data-view=board] .center .flow-shelf { grid-area:3 / 2; justify-self:end; align-self:center; z-index:3; }
+.drawing-desk[data-view=board] .flow-shelf > section { padding:0; border:0; border-radius:0; background:none; animation:none; }
+.drawing-desk[data-view=board] .flow-copy { display:none; }
+.drawing-desk[data-view=board] .flow-shelf .flow-button:not(.flow-primary), .drawing-desk[data-view=board] .flow-choice { background:var(--surface); color:var(--ink); border-color:var(--line); }
+.drawing-desk[data-view=board] .flow-shelf .flow-button[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); }
+.drawing-desk[data-view=board] .center .candidate-tray { grid-area:4 / 1 / auto / -1; background:var(--surface); }
+.drawing-desk[data-view=board] #flowResults { background:var(--surface); border-color:var(--line); }
+.drawing-desk[data-view=board] #flowResults button { background:var(--soft); color:var(--ink); border-color:var(--line); }
+.drawing-desk[data-view=board] #flowResults button[aria-pressed=true] { border-color:var(--accent); }
+.drawing-desk[data-view=board] .workspace > :is(.sidebar,.inspector) { background:var(--surface); box-shadow:0 8px 30px #182f2529; }
+.drawing-desk[data-view=board] #nodeGraph .studio-variants { background:var(--room); }
+.drawing-desk[data-view=board] #nodeGraph .studio-variants button { background:var(--surface); color:var(--ink); border-color:var(--line); }
+.drawing-desk[data-view=board] #nodeGraph .studio-variants button[aria-pressed=true] { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+
+@media (min-width:721px) {
+  .drawing-desk[data-view=board] #nodeGraph[data-has-model=false] .graph-items { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+
+@media (max-width:1120px) {
+  .drawing-desk[data-view=board] .center { grid-template-rows:42px auto auto auto; }
+  .drawing-desk[data-view=board] #nodeGraph .graph-node { min-height:clamp(370px,54vw,540px); }
+}
+@media (max-width:900px) {
+  .drawing-desk[data-view=board] .center .canvas-toolbar .live-prompt-dock { grid-area:3 / 1 / auto / -1; }
+  .drawing-desk[data-view=board] .center .flow-shelf { grid-area:4 / 1 / auto / -1; }
+  .drawing-desk[data-view=board] .center .candidate-tray { grid-row:5; }
+}
+@media (max-width:720px) {
+  .drawing-desk[data-view=board] { grid-template-rows:auto minmax(0,1fr); }
+  .drawing-desk[data-view=board] .workspace { padding-inline:10px; }
+  .drawing-desk[data-view=board] .center { grid-template-columns:minmax(0,1fr); grid-template-rows:repeat(6,auto); }
+  .drawing-desk[data-view=board] .center .canvas-toolbar .workflow-rail { grid-area:1 / 1; justify-self:stretch; }
+  .drawing-desk[data-view=board] .workflow-rail button { flex:1; padding:0 6px; }
+  .drawing-desk[data-view=board] .workbench-actions { grid-area:2 / 1; justify-self:start; justify-content:flex-start; flex-wrap:wrap; gap:4px; }
+  .drawing-desk[data-view=board] .workbench-button { padding-inline:6px; }
+  .drawing-desk[data-view=board] .toolbar-actions .icon-btn { width:28px; height:30px; flex-basis:28px; }
+  .drawing-desk[data-view=board] #nodeGraph { grid-area:4 / 1; }
+  .drawing-desk[data-view=board] #nodeGraph .graph-items { padding-left:0; }
+  .drawing-desk[data-view=board] #nodeGraph .graph-node { min-height:clamp(310px,86vw,420px); }
+  .drawing-desk[data-view=board] #nodeGraph .graph-sketch-tools { position:static; translate:none; flex-basis:100%; }
+  .drawing-desk[data-view=board] #nodeGraph .graph-sketch-tools .wb-toolbar { flex-flow:row wrap; background:transparent; box-shadow:none; border:0; padding:0; }
+  .drawing-desk[data-view=board] #nodeGraph .wb-toolbar button[data-board-tool] { width:30px; min-height:32px; }
+  .drawing-desk[data-view=board] #nodeGraph .graph-node-foot { justify-content:flex-start; }
+  .drawing-desk[data-view=board] #nodeGraph .workbench-strip { padding-left:2px; }
+  .drawing-desk[data-view=board] .center .flow-shelf { grid-area:5 / 1; }
+  .drawing-desk[data-view=board] .center .candidate-tray { grid-row:6; }
+  .drawing-desk[data-view=board] .live-prompt-dock > #renderPrompt { flex-basis:100%; }
+  .drawing-desk[data-view=board] .live-prompt-dock { flex-wrap:wrap; }
+}
+@media (max-width:380px) {
+  .drawing-desk[data-view=board] .brand { padding-inline:10px; }
+  .drawing-desk[data-view=board] .top-actions { padding-inline:6px; }
+}

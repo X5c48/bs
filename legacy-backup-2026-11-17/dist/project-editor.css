@@ -1,0 +1,53 @@
+/* The project workbench uses the same tools and geometry as the original desk. */
+.project-link-control[hidden], .project-mobile-views { display: none; }
+.project-link-control { display:inline-flex; align-items:center; text-decoration:none; }
+.drawing-desk[data-project=active] .workflow-rail button { position:relative; }
+.drawing-desk[data-project=active] .workflow-rail button::after {
+  content:""; position:absolute; display:block; inset:auto 8px 2px; height:2px;
+  border-radius:2px; background:transparent;
+}
+.drawing-desk[data-project=active] .workflow-rail button[aria-selected=true]::after { background:var(--accent); }
+.drawing-desk[data-project=active] .workflow-rail button[data-before=true]::after { background:var(--accent-line); }
+.drawing-desk[data-project=active][data-view=board] {
+  --room:#eeece7; --surface:#faf9f6; --soft:#efede7; --soft-hover:#e7e5df;
+  --ink:#22231f; --muted:#555750; --quiet:#66665e; --line:#dad7ce;
+  --line-strong:#a4a298; --accent:#304fc8; --accent-strong:#253fa8; --accent-soft:#e8edff;
+  --accent-line:#a9b9fa; --success:#2e6d55; --paper:#fffefa;
+}
+.drawing-desk[data-project=active][data-view=board] .workspace { background-image:none; }
+.drawing-desk[data-project=active] .brand span { max-width:19ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.drawing-desk[data-project=active] .brand-mark { border-color:var(--accent-line); }
+.drawing-desk[data-project=active] .top-actions :is(#openImageAdmin,#flowLayerPanelToggle) { display:none; }
+.drawing-desk[data-project=active] :is(button,a,summary,input,select):focus-visible { outline-color:var(--accent); }
+.drawing-desk[data-project=active][data-view=board] :is(.workbench-primary,.flow-primary,.graph-hd):hover:not(:disabled) {
+  background:var(--accent-strong); border-color:var(--accent-strong);
+}
+.drawing-desk[data-project=active] .flow-result-tiles button[aria-pressed=true] { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-line); }
+.drawing-desk[data-project=active] .graph-sketch-tools button[aria-pressed=true] { color:var(--accent); background:var(--accent-soft); }
+@media (max-width:720px) {
+  .drawing-desk[data-project=active][data-view=board] .center:has(#nodeGraph[data-layout=pair]) {
+    grid-template-rows:auto auto auto auto auto auto auto;
+  }
+  .drawing-desk[data-project=active][data-view=board] .center:has(#nodeGraph[data-layout=pair]) .project-mobile-views {
+    display:flex; grid-area:3 / 1 / auto / -1; gap:4px; padding:3px;
+    border:1px solid var(--line); border-radius:7px; background:var(--surface);
+  }
+  .project-mobile-views button { flex:1; border:0; border-radius:4px; background:transparent; color:var(--ink); min-height:36px; }
+  .project-mobile-views button[aria-pressed=true] { color:var(--accent); background:var(--accent-soft); font-weight:650; }
+  .drawing-desk[data-project=active][data-view=board] #nodeGraph[data-layout=pair] { grid-row:4; }
+  .drawing-desk[data-project=active] #nodeGraph[data-layout=pair] .graph-items { grid-template-columns:minmax(0,1fr); height:auto; }
+  .drawing-desk[data-project=active] #nodeGraph[data-layout=pair] .graph-node { min-height:390px; }
+  .drawing-desk[data-project=active][data-project-view=sketch] #nodeGraph[data-layout=pair] .graph-node:not([data-node-kind=sketch]),
+  .drawing-desk[data-project=active][data-project-view=effect] #nodeGraph[data-layout=pair] .graph-node[data-node-kind=sketch] { display:none; }
+  .drawing-desk[data-project=active][data-project-view=sketch] #nodeGraph[data-layout=pair] #flowResults { display:none; }
+  .drawing-desk[data-project=active][data-view=board] .topbar { grid-template-columns:minmax(0,1fr) auto; }
+  .drawing-desk[data-project=active][data-view=board] .brand { padding-inline:9px; min-width:0; gap:5px; }
+  .drawing-desk[data-project=active] .brand span { max-width:9ch; }
+  .drawing-desk[data-project=active][data-view=board] .top-actions { padding-inline:3px 8px; gap:2px; }
+  .drawing-desk[data-project=active] .top-actions .live-top-button { padding-inline:5px; font-size:11px; }
+  .drawing-desk[data-project=active] .top-actions :is(#toggleLayers,#projectHomeLink) { display:none; }
+  .drawing-desk[data-project=active][data-view=board] .center:has(#nodeGraph[data-layout=pair]) .live-prompt-dock { grid-row:5; }
+  .drawing-desk[data-project=active][data-view=board] .center:has(#nodeGraph[data-layout=pair]) .flow-shelf { grid-row:6; }
+  .drawing-desk[data-project=active][data-view=board] .center:has(#nodeGraph[data-layout=pair]) .candidate-tray { grid-row:7; }
+}
+

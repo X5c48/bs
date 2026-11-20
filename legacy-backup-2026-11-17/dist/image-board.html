@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#171817">
+  <title>方案画布 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="image-board.css">
+  <script src="project-store.js" defer></script>
+  <script src="sketch-rules.js" defer></script>
+  <script src="studio-core.js" defer></script>
+  <script src="board.js" defer></script>
+  <script src="node-graph-core.js" defer></script>
+  <script src="flow-results.js" defer></script>
+  <script src="comfy.js" defer></script>
+  <script src="image-selection.js" defer></script>
+  <script src="image-board.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="identity">
+      <a class="logo" href="projects.html"><img src="assets/icon.svg" alt="">物映</a>
+      <span class="divider" aria-hidden="true"></span>
+      <a id="boardBrief" href="projects.html"></a>
+    </div>
+    <nav class="mode" aria-label="工作台">
+      <a aria-current="page" id="boardHome">方案画布</a>
+      <a id="boardEditor" href="projects.html">草图编辑</a>
+    </nav>
+    <div class="bar-actions">
+      <button type="button" id="boardImport" class="primary">导入效果图</button>
+      <input type="file" id="boardFile" accept="image/png,image/jpeg,image/webp" hidden>
+    </div>
+  </header>
+
+  <main class="desk">
+    <section class="workarea" aria-label="方案画布">
+      <header class="workhead">
+        <div><h1>方案画布</h1><p>双击草稿继续画。选中效果图，从这一版继续改。</p></div>
+        <span id="boardCount"></span>
+      </header>
+      <div id="boardView" class="viewport" tabindex="0" aria-label="方案画布，拖动空白处移动，拖动标题排列卡片">
+        <div id="boardExtent"><div id="boardWorld">
+          <svg id="boardWires" aria-hidden="true"></svg>
+          <div id="boardCards"></div>
+        </div></div>
+        <div id="boardEmpty" class="empty" hidden>
+          <h2>从草稿或效果图开始</h2>
+          <p>画一张草稿，或者导入已有的效果图进行局部修改。</p>
+          <a class="button primary" id="emptySketch" href="projects.html">打开草图编辑</a>
+        </div>
+      </div>
+      <footer class="canvas-foot">
+        <p role="status" id="boardStatus"></p>
+        <div class="zoom" role="group" aria-label="画布缩放">
+          <button type="button" id="boardZoomOut" aria-label="缩小">−</button>
+          <button type="button" id="boardFit" title="适应画布">100%</button>
+          <button type="button" id="boardZoomIn" aria-label="放大">+</button>
+        </div>
+      </footer>
+    </section>
+    <aside id="boardInspector" class="inspector" aria-label="所选方案">
+      <div class="inspector-head"><h2>当前选中</h2><span id="selectedType"></span></div>
+      <p class="placeholder" id="inspectorEmpty">选一张图，查看它的来源和可用操作。</p>
+      <div id="inspectorContent" hidden>
+        <img id="selectedThumb" alt="">
+        <h3 id="selectedName"></h3>
+        <p id="selectedOperation"></p>
+        <div class="lineage" id="selectedLineage" hidden>
+          <button type="button" id="goSource">打开源图</button>
+          <button type="button" id="compareSource">与源图对照</button>
+        </div>
+        <button type="button" class="primary full" id="editSelected">局部改图</button>
+        <a class="button primary full" id="openSketch" hidden>打开草图</a>
+        <a class="button full" id="downloadSelected">下载图片</a>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="editDialog" aria-labelledby="editTitle">
+    <header class="dialog-head">
+      <div><p id="editSource"></p><h2 id="editTitle">局部改图</h2></div>
+      <button type="button" id="closeEdit">返回画布</button>
+    </header>
+    <div class="edit-body">
+      <div class="edit-canvas">
+        <div class="edit-stage" id="editStage">
+          <div id="maskFrame">
+            <img id="maskImage" alt="当前源图">
+            <svg id="maskDrawing" aria-label="用鼠标或触控圈选需要修改的区域" role="img" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+              <path id="maskOutline" fill-rule="evenodd" vector-effect="non-scaling-stroke"></path>
+            </svg>
+          </div>
+        </div>
+        <div class="selection-tools">
+          <div role="group" aria-label="选区工具">
+            <button type="button" data-selection-tool="lasso" aria-pressed="true">套索</button>
+            <button type="button" data-selection-tool="rectangle" aria-pressed="false">矩形</button>
+          </div>
+          <button type="button" id="clearMask">清除选区</button>
+          <span id="maskStatus" role="status">拖动圈出要改的位置</span>
+        </div>
+      </div>
+      <form class="edit-settings" id="regionForm">
+        <div>
+          <label for="regionPrompt">选区里改什么</label>
+          <textarea id="regionPrompt" maxlength="600" rows="4" required placeholder="例如：把这块表面改为暖铜色拉丝金属，保留原有的形状和光照"></textarea>
+        </div>
+        <label class="strength" for="regionStrength">改动强度 <output id="strengthValue">72%</output></label>
+        <input type="range" id="regionStrength" min="25" max="95" value="72">
+        <details id="regionModelSettings">
+          <summary>ComfyUI 模型 <span id="regionConnection">未连接</span></summary>
+          <label for="regionEndpoint">ComfyUI 地址</label>
+          <input type="url" id="regionEndpoint" placeholder="http://127.0.0.1:8189">
+          <button type="button" class="full" id="connectRegion">连接并读取模型</button>
+          <label for="regionCheckpoint">基础模型</label>
+          <select id="regionCheckpoint" disabled><option value="">先连接 ComfyUI</option></select>
+        </details>
+        <p class="edit-message" id="editStatus" role="status"></p>
+        <button type="submit" class="primary full" id="runRegion" disabled>生成新版本</button>
+        <button type="button" id="stopRegion" class="full" hidden>停止生成</button>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="compareDialog" aria-labelledby="compareTitle">
+    <header class="dialog-head"><h2 id="compareTitle">源图与当前版本</h2><button type="button" id="closeCompare">返回画布</button></header>
+    <div class="compare-body">
+      <figure><img id="compareBefore" alt="源图"><figcaption id="compareBeforeTitle"></figcaption></figure>
+      <figure><img id="compareAfter" alt="当前版本"><figcaption id="compareAfterTitle"></figcaption></figure>
+    </div>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,27 @@
+/* 物映设计令牌：暗色工作台统一用色、圆角、间距。布局对齐 Vizcom，视觉沿用物映。 */
+:root{
+  color-scheme:dark;
+  --font:Inter,system-ui,"Microsoft YaHei UI",sans-serif;
+  --page:#1a1a1c;
+  --surface:#242427;
+  --raised:#2d2d30;
+  --sunken:#202024;
+  --line:#414147;
+  --line-strong:#5a5a63;
+  --text:#f1f0f2;
+  --quiet:#b4b3ba;
+  --faint:#85848c;
+  --blue:#aba9ff;
+  --active:#6b60f4;
+  --active-hover:#7b70ff;
+  --active-soft:#3f3b62;
+  --wire:#676385;
+  --dot:#343438;
+  --danger:#ffc4b7;
+  --paper:#f1f0ec;
+  --radius-s:5px;
+  --radius:8px;
+  --shadow:0 8px 28px #08080a55;
+  --header-h:54px;
+  --rail-w:44px;
+}

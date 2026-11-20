@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17181a">
+  <title>后台管理 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="files.css">
+  <link rel="stylesheet" href="admin.css">
+  <script src="platform-api.js" defer></script>
+  <script src="comfy.js" defer></script>
+  <script src="workspace-workflow.js" defer></script><script src="workspace-video.js" defer></script>
+  <script src="admin.js" defer></script>
+</head>
+<body>
+  <div class="files-app">
+    <aside class="files-sidebar">
+      <a class="wordmark" href="files.html"><img src="assets/icon.svg" width="30" height="30" alt=""><span>物映</span></a>
+      <nav class="file-navigation" aria-label="工作区">
+        <a href="files.html"><span class="nav-folder" aria-hidden="true"></span>我的文件</a>
+        <a class="nav-active" href="admin.html" aria-current="page"><span class="nav-tool" aria-hidden="true"></span>后台管理</a>
+      </nav>
+    </aside>
+    <main class="files-main admin-main">
+      <header class="files-heading">
+        <div><h1>后台管理</h1><p id="currentProvider" class="admin-muted" role="status"></p></div>
+        <a class="button button-secondary" href="files.html">返回文件</a>
+      </header>
+      <nav class="admin-tabs" aria-label="接口类型">
+        <button type="button" data-panel="images" aria-pressed="true">图片 API</button>
+        <button type="button" data-panel="comfy" aria-pressed="false">本机 ComfyUI</button>
+        <button type="button" data-panel="hub" aria-pressed="false">RunningHub</button>
+        <button type="button" data-panel="text" aria-pressed="false">文字模型</button>
+      </nav>
+
+      <section id="panel-images" class="admin-split" aria-label="图片 API">
+        <div class="admin-library">
+          <div class="admin-list-head"><h2>接口列表</h2><button id="addApi" type="button" class="button button-secondary">添加接口</button></div>
+          <button id="addApilio" type="button" class="button button-secondary admin-apilio">＋ 添加 apilio.ai（模型中转）</button>
+          <p class="admin-muted admin-apilio-hint">已预填 apilio.ai 地址与图像编辑模型，只需粘贴你的 sk 保存即可。</p>
+          <div id="apiList" class="admin-list"></div>
+        </div>
+        <form id="apiForm" class="admin-form">
+          <h2 id="apiTitle">添加图片接口</h2>
+          <label for="apiName">接口名称</label>
+          <input id="apiName" required maxlength="80" placeholder="例如 产品渲染">
+          <label for="apiUrl">API 地址</label>
+          <input id="apiUrl" type="url" required maxlength="512" placeholder="https://api.example.com/v1" spellcheck="false">
+          <label for="apiModel">模型 ID</label>
+          <input id="apiModel" required maxlength="180" placeholder="服务商提供的模型 ID" spellcheck="false">
+          <label for="apiKey">API 密钥</label>
+          <input id="apiKey" type="password" maxlength="2048" autocomplete="new-password">
+          <div class="admin-pair">
+            <label for="apiMode">能力<select id="apiMode"><option value="edit">支持图片编辑</option><option value="text">仅文生图</option></select></label>
+            <label for="apiSize">尺寸（可选）<input id="apiSize" maxlength="11" pattern="[0-9]{2,5}x[0-9]{2,5}" placeholder="1024x1024"></label>
+          </div>
+          <label for="apiImageField">图片字段名<select id="apiImageField"><option value="image[]">image[]（国内中转常见）</option><option value="image">image（OpenAI 官方 / apilio.ai）</option></select></label>
+          <p class="admin-muted">填写 OpenAI 兼容接口。图片编辑可用于项目出图，仅文生图可在这里试用。密钥保存在运行中的后台。apilio.ai 等官方格式中转请选择 <code>image</code> 字段。</p>
+          <div class="admin-actions">
+            <button id="saveApi" type="submit" class="button button-secondary">保存接口</button>
+            <button id="testApi" type="button" class="button button-secondary" disabled>测试连接</button>
+            <button id="useApi" type="button" class="button button-primary" disabled>设为出图来源</button>
+          </div>
+          <p id="apiStatus" class="admin-status" role="status"></p>
+          <details id="apiPreview" hidden>
+            <summary>试出一张</summary>
+            <label for="apiPrompt">出图提示</label><textarea id="apiPrompt" maxlength="4000" rows="3" placeholder="例如 桌面上的苔绿色小台灯"></textarea>
+            <button id="tryApi" type="button" class="button button-secondary">生成试图（按接口计费）</button>
+            <img id="apiPreviewImage" alt="接口试图" hidden>
+          </details>
+        </form>
+      </section>
+
+      <section id="panel-comfy" aria-label="本机 ComfyUI" hidden>
+        <form id="comfyForm" class="admin-form">
+          <h2>本机 ComfyUI</h2>
+          <label for="adminComfyEndpoint">服务地址</label>
+          <input id="adminComfyEndpoint" type="url" required placeholder="http://127.0.0.1:8188" spellcheck="false">
+          <label for="adminCheckpoint">基础模型</label><select id="adminCheckpoint"><option value="">先读取模型</option></select>
+          <label for="adminControlnet">ControlNet（可选）</label><select id="adminControlnet"><option value="">无</option></select>
+          <div class="admin-actions">
+            <button id="readComfy" type="submit" class="button button-secondary">连接并读取模型</button>
+            <button id="useComfy" type="button" class="button button-primary" disabled>设为出图来源</button>
+          </div>
+          <p id="comfyStatus" class="admin-status" role="status"></p>
+        </form>
+        <form id="videoWorkflowForm" class="admin-form">
+          <h2>本机视频工作流</h2>
+          <label for="videoComfyEndpoint">ComfyUI 地址</label>
+          <input id="videoComfyEndpoint" type="url" required placeholder="http://127.0.0.1:8188">
+          <button type="button" class="button button-secondary" id="loadLtxVideo">载入 LTX-Video 2B 预设</button>
+          <label for="videoWorkflowJson">ComfyUI API 工作流 JSON</label>
+          <textarea id="videoWorkflowJson" rows="8" maxlength="262144" spellcheck="false"></textarea>
+          <p>用 <code>{{PROMPT}}</code> 标记提示词。图生视频需要 <code>{{FIRST_FRAME}}</code>，支持尾帧的工作流可添加 <code>{{LAST_FRAME}}</code>。可用 <code>{{DURATION}}</code> 接收秒数。留空保存可取消配置。</p>
+          <button type="submit" class="button button-secondary">保存视频工作流</button>
+          <p id="videoWorkflowStatus" class="admin-status" role="status"></p>
+        </form>
+      </section>
+
+      <section id="panel-hub" aria-label="RunningHub" hidden>
+        <form id="hubAdminForm" class="admin-form">
+          <h2>RunningHub</h2>
+          <label for="adminHubKey">企业级-共享 API Key</label><input id="adminHubKey" type="password" maxlength="512" autocomplete="new-password">
+          <label for="adminHubModel">出图模型</label><select id="adminHubModel"></select>
+          <div class="admin-actions">
+            <button type="submit" class="button button-secondary">保存密钥</button>
+            <button id="testHub" type="button" class="button button-secondary" disabled>测试并查看余额</button>
+            <button id="useHub" type="button" class="button button-primary" disabled>设为出图来源</button>
+          </div>
+          <p id="hubAdminStatus" class="admin-status" role="status"></p>
+        </form>
+      </section>
+
+      <section id="panel-text" aria-label="文字模型" hidden>
+        <form id="textAdminForm" class="admin-form">
+          <h2>设计智能体文字模型</h2>
+          <label for="textUrl">API 地址</label><input id="textUrl" type="url" required maxlength="512" placeholder="https://api.example.com/v1">
+          <label for="textModel">模型 ID</label><input id="textModel" required maxlength="180">
+          <label for="textKey">API 密钥</label><input id="textKey" type="password" autocomplete="new-password" maxlength="2048">
+          <button type="submit" class="button button-secondary">保存文字接口</button>
+          <p id="textAdminStatus" class="admin-status" role="status"></p>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
+

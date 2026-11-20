@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#191a19">
+  <title>方案展示 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="presentation.css">
+  <script src="project-store.js" defer></script>
+  <script src="sketch-rules.js" defer></script>
+  <script src="studio-core.js" defer></script>
+  <script src="node-graph-core.js" defer></script>
+  <script src="board.js" defer></script>
+  <script src="presentation.js" defer></script>
+</head>
+<body>
+  <header class="show-top">
+    <a href="projects.html" class="show-brand"><img src="assets/icon.svg" alt="">物映</a>
+    <span class="show-top-label">方案展示</span>
+    <a href="projects.html" id="presentBack" class="show-button">返回编辑</a>
+  </header>
+  <main class="show-main">
+    <header class="show-head">
+      <div><p id="presentProject"></p><h1 id="presentName">方案展示</h1></div>
+      <span id="presentStale" class="show-badge" hidden>对应旧稿</span>
+    </header>
+    <section class="show-stage" id="presentStage" aria-label="展示画面">
+      <img id="presentImage" alt="" hidden>
+      <img id="presentComparison" alt="当前草图" hidden>
+      <video id="presentVideo" controls playsinline preload="metadata" hidden></video>
+      <p id="presentEmpty">此稿件还没有画面。返回编辑后即可展示草图或效果。</p>
+    </section>
+    <div class="show-controls">
+      <div id="presentThumbs" class="show-thumbs" role="group" aria-label="展示内容"></div>
+      <div class="show-actions">
+        <a id="presentReselect" class="show-button" hidden>重新选图</a>
+        <button id="presentMotion" type="button" class="show-button" aria-pressed="false" hidden>播放镜头</button>
+        <button id="presentAttach" type="button" class="show-button" hidden>添加视频</button>
+        <input id="presentVideoInput" type="file" accept="video/mp4,video/webm,.mp4,.webm" hidden>
+        <button id="presentExport" type="button" class="show-button show-primary" disabled>导出 PNG</button>
+      </div>
+    </div>
+    <p id="presentStatus" class="show-status" role="status"></p>
+  </main>
+</body>
+</html>

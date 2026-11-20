@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1a1a1c">
+  <title>部件推敲 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="shape-studio.css">
+  <script src="project-store.js" defer></script>
+  <script src="workspace-store.js" defer></script><script src="workspace-account.js" defer></script>
+  <script src="sketch-rules.js" defer></script>
+  <script src="shape-model.js" defer></script>
+  <script src="workspace-composite.js" defer></script>
+  <script src="image-selection.js" defer></script>
+  <script src="comfy.js" defer></script>
+  <script src="workspace-render.js" defer></script>
+  <script src="workspace-workflow.js" defer></script>
+  <script src="shape-studio.js" defer></script>
+</head>
+<body>
+  <header class="shape-header">
+    <a class="shape-button" id="shapeBack" href="files.html">← 工作台</a>
+    <div class="shape-title"><span id="shapeProject"></span><h1 id="shapeTitle">部件推敲</h1></div>
+    <a class="shape-button" id="shapeImage" href="files.html" hidden>图像编辑室</a>
+  </header>
+  <p id="shapeStatus" class="shape-status" role="status" aria-live="polite"></p>
+  <main id="shapeShell" class="shape-shell" hidden>
+    <aside class="shape-parts" aria-labelledby="partListTitle">
+      <header class="shape-section-head"><h2 id="partListTitle">部件</h2><span id="partCount"></span></header>
+      <div class="shape-tools" role="group" aria-label="创建部件">
+        <button type="button" id="tracePart" aria-pressed="false">描轮廓</button>
+        <button type="button" id="addRectangle">矩形</button>
+        <button type="button" id="addEllipse">椭圆</button>
+      </div>
+      <ul id="shapeParts"></ul>
+    </aside>
+    <section class="shape-workspace" aria-label="部件草稿画布">
+      <div class="shape-stage-tools">
+        <span id="shapeDimensions"></span>
+        <label id="referenceToggle" hidden><input id="showReference" type="checkbox" checked> 底图</label>
+        <button type="button" id="loadExample" hidden>载入台灯示例</button>
+      </div>
+      <div class="shape-stage">
+        <div class="shape-sheet" id="shapeSheet">
+          <img id="shapeReference" alt="" hidden draggable="false">
+          <svg id="shapeCanvas" aria-label="部件轮廓" role="img"></svg>
+        </div>
+      </div>
+      <p id="shapeHint" class="shape-hint"></p>
+    </section>
+    <aside class="shape-properties" aria-label="部件参数与推敲">
+      <header class="shape-section-head"><h2 id="partTitle">部件参数</h2><button type="button" id="toggleLock" hidden></button></header>
+      <p id="choosePart" class="shape-muted">添加或选中一个部件，查看它的位置、尺寸和角度。</p>
+      <div id="shapePartDetails" hidden>
+        <form id="partForm">
+          <fieldset id="partFields">
+            <label class="wide" for="partName">名称<input id="partName" maxlength="60" required></label>
+            <label for="partX">中心 X（px）<input id="partX" type="number" step="any" required></label>
+            <label for="partY">中心 Y（px）<input id="partY" type="number" step="any" required></label>
+            <label for="partWidth">宽度（px）<input id="partWidth" type="number" step="any" min="8" required></label>
+            <label for="partHeight">高度（px）<input id="partHeight" type="number" step="any" min="8" required></label>
+            <label for="partAngle">角度（°）<input id="partAngle" type="number" step="any" min="-180" max="180" required></label>
+            <button class="shape-primary wide" type="submit" id="savePart">保存参数</button>
+          </fieldset>
+        </form>
+        <section class="shape-controls" aria-labelledby="variantTitle">
+          <h2 id="variantTitle">规则推敲</h2>
+          <form id="variantForm" class="shape-row">
+            <label for="variantField">变化维度<select id="variantField"><option value="width">宽度</option><option value="height">高度</option><option value="angle">角度</option></select></label>
+            <label for="variantAmount" id="variantAmountLabel"><span>幅度（%）</span><input id="variantAmount" type="number" min="5" max="40" value="20" required></label>
+            <button type="submit" id="generateVariants">生成候选</button>
+          </form>
+        </section>
+        <section class="shape-controls" aria-labelledby="partAiTitle">
+          <h2 id="partAiTitle">本机 AI 精修</h2>
+          <form id="partAiForm">
+            <label for="partPrompt">只编辑当前部件</label>
+            <textarea id="partPrompt" rows="2" maxlength="1200" placeholder="例如 给灯罩加细密竖纹"></textarea>
+            <div class="shape-tools"><button type="submit" id="partAiRun">生成精修图</button><button type="button" id="partAiCancel" hidden>取消</button></div>
+          </form>
+          <a href="admin.html?source=comfy" class="shape-text-link">本机模型设置</a>
+        </section>
+        <button type="button" id="removePart" class="shape-danger">移除部件</button>
+      </div>
+    </aside>
+    <section class="shape-comparison" id="shapeComparison" aria-labelledby="compareTitle">
+      <header class="shape-section-head"><h2 id="compareTitle">方案对照</h2><button type="button" id="exportComparison" hidden>导出对照记录</button></header>
+      <div id="shapeVersions"></div>
+      <section id="shapeAiResults" hidden><h2>部件精修结果</h2><div id="aiResultList"></div></section>
+    </section>
+  </main>
+</body>
+</html>
+

@@ -313,5 +313,5 @@
       sketch.nodes.map(node => [node.point.x, node.point.y, node.in.x, node.in.y, node.out.x, node.out.y])]);
   }
 
-  return { createBase, pinSpec, lockedIndices, segmentPath, pathData, controlBounds, inspect, generate, redraw, sketchKey };
+  return { createBase, pinSpec, lockedIndices, segmentPath, pathData, controlBounds, inspect, generate, redraw, sketchKey, simplifyStroke };
 });

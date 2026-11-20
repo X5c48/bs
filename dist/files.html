@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#17181a">
+  <title>我的文件 · 物映</title>
+  <link rel="icon" href="assets/icon.svg">
+  <link rel="stylesheet" href="files.css">
+  <script src="project-store.js" defer></script>
+  <script src="workspace-store.js" defer></script>
+  <script src="workspace-account.js" defer></script>
+  <script src="shape-model.js" defer></script>
+  <script src="workspace-composite.js" defer></script>
+  <script src="files.js" defer></script>
+</head>
+<body>
+  <div class="files-app">
+    <aside class="files-sidebar">
+      <a class="wordmark" href="files.html" aria-label="物映文件首页">
+        <img src="assets/icon.svg" width="30" height="30" alt="">
+        <span>物映</span>
+      </a>
+      <nav class="file-navigation" aria-label="工作区">
+        <a class="nav-active" href="files.html" aria-current="page"><span class="nav-folder" aria-hidden="true"></span>我的文件</a>
+        <a href="admin.html"><span class="nav-tool" aria-hidden="true"></span>后台管理</a>
+      </nav>
+      <p class="storage-note">本机工作区</p>
+    </aside>
+    <main class="files-main">
+      <p class="files-feedback" id="account-status" role="status">正在连接工作区…</p>
+      <div id="local-files" hidden>
+      <header class="files-heading">
+        <h1>我的文件</h1>
+        <div class="file-heading-actions">
+          <input type="file" id="project-backup-file" accept=".json,application/json" hidden>
+          <button class="button button-secondary" id="import-backup" type="button">导入备份</button>
+          <button class="button button-primary" id="new-file" type="button"><span aria-hidden="true">＋</span>新建文件</button>
+        </div>
+      </header>
+      <section class="legacy-panel" id="legacy-projects" aria-labelledby="legacy-title" hidden>
+        <h2 id="legacy-title">此浏览器中的旧文件</h2>
+        <p>可先下载备份，再迁入本机工作区。浏览器里的原文件会保留。</p>
+        <ul id="legacy-list"></ul>
+      </section>
+      <div class="files-toolbar">
+        <label class="search-field">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input type="search" id="file-search" placeholder="搜索文件" aria-label="搜索文件" autocomplete="off">
+        </label>
+        <label class="sort-field">
+          <span class="sr-only">排序方式</span>
+          <select id="file-sort" aria-label="排序方式">
+            <option value="recent">最近更新</option>
+            <option value="name">文件名称</option>
+          </select>
+        </label>
+      </div>
+      <p class="files-feedback" id="file-feedback" role="status" aria-live="polite" hidden></p>
+      <ul class="file-grid" id="file-grid" aria-label="文件" hidden></ul>
+      <section class="files-empty" id="files-empty" hidden>
+        <span class="empty-document" aria-hidden="true"></span>
+        <h2 id="empty-title">还没有文件</h2>
+        <p id="empty-description">新建文件后，可以在工作台里画图或导入图片。</p>
+        <button class="button button-secondary" id="empty-action" type="button">新建文件</button>
+      </section>
+      </div>
+    </main>
+  </div>
+  <dialog class="file-dialog" id="file-dialog" aria-labelledby="file-dialog-title">
+    <form id="file-form">
+      <h2 id="file-dialog-title">新建文件</h2>
+      <label for="file-name">文件名称</label>
+      <input id="file-name" name="name" required maxlength="80" autocomplete="off" placeholder="未命名文件">
+      <p class="dialog-error" id="file-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button button-secondary" id="export-file" type="button" hidden>下载备份</button>
+        <button class="button button-secondary" id="cancel-file" type="button">取消</button>
+        <button class="button button-primary" id="confirm-file" type="submit">创建文件</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

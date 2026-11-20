@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1a1b1d">
+  <title>物映 · 图像工作室</title>
+  <link rel="stylesheet" href="image-studio.css">
+  <link rel="stylesheet" href="workspace-variation.css">
+  <script defer src="project-store.js"></script>
+  <script defer src="workspace-store.js"></script><script src="workspace-account.js" defer></script>
+  <script defer src="comfy.js"></script>
+  <script defer src="image-selection.js"></script>
+  <script defer src="shape-model.js"></script>
+  <script defer src="workspace-composite.js"></script>
+  <script defer src="platform-api.js"></script>
+  <script defer src="workspace-render.js"></script>
+  <script defer src="workspace-workflow.js"></script>
+  <script defer src="workspace-variation.js"></script>
+  <script defer src="image-studio.js"></script>
+</head>
+<body>
+  <svg width="0" height="0" class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M20 12H4m7-7-7 7 7 7"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="m14 5 5 5M4 20l4-.7L21 6.5l-4.5-4.4L4 15.8z"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m8.5 6.5 8.8 8.8M10 20l-6.2-6.2a2 2 0 0 1 0-2.8l7.2-7.2a2 2 0 0 1 2.8 0l6.4 6.4a2 2 0 0 1 0 2.8L13 20zm2 0h9"/></symbol>
+    <symbol id="i-lasso" viewBox="0 0 24 24"><path d="M19 14c1.3-1 2-2.3 2-3.8C21 6.8 17.2 4 12.5 4S4 6.8 4 10.2s3.8 6.2 8.5 6.2h2a4 4 0 0 1 4 4H16a5 5 0 0 1-5-5v-1"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="1" stroke-dasharray="3 2"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5m-5-5h9a5 5 0 0 1 5 5"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5m5-5h-9a5 5 0 0 0-5 5"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/></symbol>
+    <symbol id="i-hidden" viewBox="0 0 24 24"><path d="m4 4 16 16M5 9a13 13 0 0 0-3 3s4 6 10 6a10 10 0 0 0 3-.5m2-1c3.4-1.8 5-4.5 5-4.5s-4-6-10-6c-1 0-2 .1-3 .5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14m-7-7h14"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m4 16 5-5 4 4 2-2 5 5"/><circle cx="15.5" cy="8.5" r="1"/></symbol>
+    <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 17v3h16v-3"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 2.7 7.3L22 12l-7.3 2.7L12 22l-2.7-7.3L2 12l7.3-2.7z"/></symbol>
+  </svg>
+  <header class="studio-header">
+    <a id="studioClose" class="back-button" href="files.html"><svg><use href="#i-arrow"/></svg><span>工作台</span></a>
+    <div class="studio-heading">
+      <span id="studioProject"></span>
+      <strong id="studioAsset">图像工作室</strong>
+    </div>
+    <div class="header-actions">
+      <span id="studioSaved" class="saved-status" role="status">载入中</span>
+      <button id="studioExport" type="button" class="button"><svg><use href="#i-download"/></svg>导出 PNG</button>
+    </div>
+  </header>
+
+  <main id="studioShell" class="studio-shell" hidden>
+    <aside class="layers pane" aria-labelledby="layersHeading">
+      <header class="pane-header">
+        <h2 id="layersHeading">图层</h2>
+        <div class="pane-tools">
+          <button type="button" class="icon" id="studioImportLayer" title="导入图片图层" aria-label="导入图片图层"><svg><use href="#i-image"/></svg></button>
+          <button type="button" class="icon" id="studioAddLayer" title="新增手绘图层 (N)" aria-label="新增手绘图层"><svg><use href="#i-plus"/></svg></button>
+          <input id="studioLayerFile" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+        </div>
+      </header>
+      <ul id="studioLayers" class="layer-list" aria-label="从上至下的图层"></ul>
+      <div class="layer-options" id="studioLayerOptions" hidden>
+        <label for="studioOpacity">不透明度 <output id="studioOpacityValue">100%</output></label>
+        <input type="range" min="0" max="100" value="100" id="studioOpacity">
+        <label for="studioBlendMode">混合模式</label>
+        <select id="studioBlendMode"></select>
+        <div class="layer-order">
+          <button type="button" class="button" id="studioLayerUp">上移</button>
+          <button type="button" class="button" id="studioLayerDown">下移</button>
+          <button type="button" class="button danger" id="studioRemoveLayer">删除</button>
+        </div>
+      </div>
+    </aside>
+
+    <section class="editor" aria-label="图像画布">
+      <div class="editor-tools">
+        <div class="tool-group" role="group" aria-label="画布工具">
+          <button class="icon tool" type="button" data-tool="brush" aria-label="画笔" title="画笔 (B)" aria-pressed="true"><svg><use href="#i-pen"/></svg></button>
+          <button class="icon tool" type="button" data-tool="erase" aria-label="橡皮" title="橡皮 (E)" aria-pressed="false"><svg><use href="#i-eraser"/></svg></button>
+          <button class="icon tool" type="button" data-tool="lasso" aria-label="套索选区" title="套索选区 (L)" aria-pressed="false"><svg><use href="#i-lasso"/></svg></button>
+          <button class="icon tool" type="button" data-tool="rect" aria-label="矩形选区" title="矩形选区 (M)" aria-pressed="false"><svg><use href="#i-rect"/></svg></button>
+        </div>
+        <div class="tool-group" id="strokeSettings">
+          <input type="color" id="studioColor" aria-label="画笔颜色" value="#24242b">
+          <label for="studioSize">笔宽</label><input type="range" id="studioSize" aria-label="笔宽" min="1" max="96" value="5"><output id="studioSizeValue">5 px</output>
+        </div>
+        <button type="button" class="button" id="studioLive" aria-pressed="false">实时辅助</button>
+        <button type="button" class="button clear-selection" id="studioClearSelection" hidden>取消选区</button>
+        <div class="tool-group history">
+          <button type="button" class="icon" id="studioUndo" title="撤销" aria-label="撤销" disabled><svg><use href="#i-undo"/></svg></button>
+          <button type="button" class="icon" id="studioRedo" title="重做" aria-label="重做" disabled><svg><use href="#i-redo"/></svg></button>
+        </div>
+      </div>
+      <div class="editor-stage" id="studioStage" data-tool="brush">
+        <div class="preview-banner" id="studioPreviewBanner" hidden>
+          <span id="studioPreviewLabel">候选预览</span><button class="button" id="studioExitPreview" type="button">返回编辑</button>
+        </div>
+        <div class="canvas-box" id="studioCanvasBox">
+          <canvas id="studioCanvas" aria-label="图像画布"></canvas>
+          <img class="live-blend" id="studioLiveBlend" alt="" hidden>
+          <canvas id="studioOverlay" tabindex="0" aria-label="使用画笔绘画或绘制选区"></canvas>
+        </div>
+        <figure class="live-pane" id="studioLivePane" hidden>
+          <div class="live-frame" id="studioLiveFrame"><img id="studioLiveImage" alt="实时渲染结果"><span class="live-empty" id="studioLiveEmpty">开始绘画，渲染会跟着笔触更新</span></div>
+          <figcaption><span class="live-dot" id="studioLiveDot" data-state="idle"></span><span id="studioLiveState">等待笔触</span><span class="live-size" id="studioLiveSize"></span><span class="live-time" id="studioLiveTime"></span></figcaption>
+          <div class="live-history" id="studioLiveHistory" hidden aria-label="最近的历史帧"></div>
+        </figure>
+        <div class="live-bar" id="studioLiveBar" hidden>
+          <div class="segmented" role="group" aria-label="实时视图">
+            <button type="button" class="button" data-live-view="split" aria-pressed="true">并排</button>
+            <button type="button" class="button" data-live-view="blend" aria-pressed="false">叠加</button>
+          </div>
+          <label class="live-range" id="studioLiveBlendField" hidden>叠加 <input type="range" id="studioLiveOpacity" min="0" max="100" value="70" aria-label="叠加不透明度"></label>
+          <label class="live-range">AI 强度 <input type="range" id="studioLiveStrength" min="20" max="95" value="60" aria-label="AI 强度"><output id="studioLiveStrengthValue">60%</output></label>
+          <div class="segmented" role="group" aria-label="画质档">
+            <button type="button" class="button" data-live-tier="speed" aria-pressed="false" title="最快出帧，分辨率与步数最低">速度</button>
+            <button type="button" class="button" data-live-tier="balanced" aria-pressed="true" title="默认档，速度与细节均衡">均衡</button>
+            <button type="button" class="button" data-live-tier="quality" aria-pressed="false" title="更多步数与更高分辨率，出帧更慢">质量</button>
+          </div>
+          <label class="live-range" id="studioLiveModelField" hidden>模型 <select id="studioLiveModel" aria-label="实时渲染基础模型"></select></label>
+          <button type="button" class="button" id="studioLivePause" aria-pressed="false" title="暂停后画笔不再触发渲染，最后一帧保留">暂停</button>
+          <button type="button" class="button" id="studioLiveSeed" title="保持构图稳定的随机种子，点击换一组">换一组</button>
+          <button type="button" class="button" id="studioLiveHD" disabled title="沿用当前草图、提示词、主题与种子，重渲一帧 1280×1024 高清图">高清增强</button>
+          <button type="button" class="button" id="studioLiveTheme" aria-expanded="false" title="给这张方案设置主题，实时渲染会跟着主题走">主题</button>
+          <button type="button" class="button primary" id="studioLiveApply" disabled>采用为图层</button>
+        </div>
+        <div class="theme-pop" id="studioThemePop" hidden>
+          <div class="theme-pop-head"><strong>方案主题</strong><span>只作用于这张图的实时渲染</span></div>
+          <label for="studioThemeText">主题描述<input id="studioThemeText" maxlength="300" placeholder="例如：北欧极简家居，暖白哑光，柔和自然光"></label>
+          <details id="studioThemeAdvanced">
+            <summary>高级：内部提示词</summary>
+            <textarea id="studioThemeCustom" rows="3" maxlength="1200" placeholder="留空则根据主题自动生成；填写后覆盖自动结果"></textarea>
+            <p>主体锁定规则始终保留：主题只改风格、材质、配色、灯光与场景，不改产品结构。</p>
+          </details>
+          <div class="theme-pop-actions">
+            <button type="button" class="button subtle" id="studioThemeClear">清除内容</button>
+            <button type="button" class="button primary" id="studioThemeDone">完成</button>
+          </div>
+        </div>
+      </div>
+      <footer class="editor-footer"><span id="studioDimensions"></span><span id="studioHint">在画布上绘画</span></footer>
+    </section>
+
+    <aside class="operations pane" aria-labelledby="operationHeading">
+      <header class="pane-header"><h2 id="operationHeading">生成</h2><button type="button" class="button subtle" id="studioModelSettings">模型设置</button></header>
+      <form id="studioOperation">
+        <label for="studioKind">操作</label>
+        <select id="studioKind">
+          <option value="instant">快速渲染</option>
+          <option value="render">提示渲染</option>
+          <option value="modify">修改图像</option>
+          <option value="color">配色变化</option>
+          <option value="form">造型变化</option>
+          <option value="view">生成视角</option>
+          <option value="cutout">去除背景</option>
+          <option value="outpaint">扩展画布</option>
+          <option value="upscale">放大 2×</option>
+        </select>
+        <div id="studioFidelityField">
+          <label for="studioFidelity">目标阶段</label>
+          <select id="studioFidelity">
+            <option value="auto">自动推进</option><option value="line">整理线稿</option>
+            <option value="color">平面色块</option><option value="shaded">明暗体积</option><option value="realistic">写实渲染</option>
+          </select>
+        </div>
+        <div id="studioRenderInputs" hidden>
+          <label for="studioRenderStyle" id="studioRenderStyleLabel">风格预设</label>
+          <select id="studioRenderStyle"></select>
+          <label for="studioReference">项目参考图</label>
+          <select id="studioReference"></select>
+          <label for="studioReferenceRole" id="studioReferenceRoleLabel">参考用途</label>
+          <select id="studioReferenceRole"><option value="style">风格</option><option value="color">配色</option></select>
+        </div>
+        <div id="studioExpandFields" hidden>
+          <label for="studioExpandDirection">扩展方向</label>
+          <select id="studioExpandDirection"><option value="right">右侧</option><option value="left">左侧</option><option value="top">上方</option><option value="bottom">下方</option></select>
+          <label for="studioExpandPercent">增加幅度</label>
+          <select id="studioExpandPercent"><option value="25">25%</option><option value="50">50%</option><option value="75">75%</option></select>
+        </div>
+        <div id="studioVariation" hidden></div>
+        <div id="studioPromptField" hidden>
+          <label for="studioPrompt">描述想要的结果</label>
+          <textarea id="studioPrompt" rows="4" maxlength="1200" placeholder="例如：拉丝铝外壳，保留原有轮廓"></textarea>
+        </div>
+        <div class="operation-split">
+          <label for="studioStrength" id="studioStrengthField">改动强度 <output id="studioStrengthValue">55%</output><input type="range" min="25" max="95" value="55" id="studioStrength"></label>
+          <label for="studioQuantity">数量<select id="studioQuantity"><option value="1">1 张</option><option value="2">2 张</option><option value="4">4 张</option><option value="8" hidden disabled>8 张</option><option value="16" hidden disabled>16 张</option></select></label>
+        </div>
+        <p id="studioRunHint" class="run-hint"></p>
+        <div class="run-row">
+          <button type="submit" id="studioGenerate" class="button primary"><svg><use href="#i-spark"/></svg><span id="studioGenerateLabel">渲染</span></button>
+          <button type="button" id="studioCancelRun" class="button" hidden>取消</button>
+        </div>
+        <p id="studioRunStatus" class="run-status" role="status" aria-live="polite"></p>
+      </form>
+      <section class="result-pane" aria-labelledby="resultsHeading">
+        <header class="pane-header"><h2 id="resultsHeading">结果 <span id="studioResultCount">0</span></h2></header>
+        <div id="studioResults"></div>
+        <div id="studioCandidateActions" hidden>
+          <button type="button" class="button primary" id="studioApplyResult">添加到图层</button>
+          <button type="button" class="button" id="studioPromoteResult" title="作为独立图卡放到工作台，可从它接下一轮">放到工作台</button>
+          <button type="button" class="button" id="studioRestoreRun">恢复设置</button>
+          <button type="button" class="button" id="studioRerun" title="读取这一批保存的输入快照和选区，用新种子再生成">按原输入重跑</button>
+          <button type="button" class="button" id="studioShowInput" aria-pressed="false">查看源图</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="studioConnection" aria-labelledby="connectionHeading">
+    <header class="pane-header"><h2 id="connectionHeading">出图模型</h2><button type="button" class="icon" id="studioCloseConnection" aria-label="关闭"><svg><use href="#i-close"/></svg></button></header>
+    <form id="studioConnectForm">
+      <label for="studioProvider">出图来源</label>
+      <select id="studioProvider"><option value="runninghub">RunningHub 云端 API</option><option value="comfy">本机 ComfyUI</option><option value="imageapi">自定义图片 API</option></select>
+      <div id="studioCloudFields" class="connection-group">
+        <label for="studioCloudModel">RunningHub 模型</label><select id="studioCloudModel"><option value="qwen-image-2.0-edit">千问 2.0 图像编辑（推荐起步）</option><option value="seedream-v4.5">Seedream 4.5 图生图</option><option value="seedream-v5-pro">Seedream V5 Pro · 稳定版</option><option value="omni-v2">全能图片 V2 · 官方稳定版</option><option value="omni-g2">全能图片 G-2 · 官方稳定版</option></select>
+        <p class="run-status">在「后台管理」填写 RunningHub 密钥。</p>
+      </div>
+      <div id="studioImageApiFields" class="connection-group" hidden>
+        <label for="studioImageApi">图片接口</label><select id="studioImageApi"></select>
+      </div>
+      <div id="studioComfyFields" class="connection-group">
+        <label for="studioEndpoint">服务地址</label>
+        <div class="connection-row">
+          <input id="studioEndpoint" type="url" placeholder="http://127.0.0.1:8189">
+          <button type="submit" class="button" id="studioConnect">读取模型</button>
+        </div>
+        <label for="studioCheckpoint">基础模型</label><select id="studioCheckpoint"></select>
+        <label for="studioControlnet">ControlNet</label><select id="studioControlnet"><option value="">无</option></select>
+      </div>
+      <a class="button subtle" href="admin.html">后台管理</a>
+      <p id="studioConnectionStatus" class="run-status" role="status"></p>
+      <button type="button" class="button primary" id="studioSaveModel">使用当前设置</button>
+    </form>
+  </dialog>
+  <section class="load-error" id="studioLoadError" role="alert" hidden>
+    <strong>无法打开图像</strong>
+    <p id="studioLoadMessage"></p>
+    <a id="studioReturn" class="button" href="files.html">返回工作台</a>
+  </section>
+</body>
+</html>

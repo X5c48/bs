@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>回到物映</title>
+  <script>
+    const query=new URLSearchParams(location.search);
+    const project=query.get('project'), asset=query.get('asset');
+    const uuid=/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+    if(project&&uuid.test(project)){
+      const params=new URLSearchParams({project});
+      if(asset&&uuid.test(asset)) params.set('asset',asset);
+      location.replace('workbench.html?'+params);
+    }else{
+      location.replace('files.html');
+    }
+  </script>
+</head>
+<body><a href="files.html">打开物映</a></body>
+</html>
+

@@ -70,6 +70,62 @@ async function main() {
     check('旧草稿读取时补全 depth/z', parts.every(p => Number.isFinite(p.depth) && Number.isFinite(p.z)),
       parts.map(p => p.name + ':' + p.depth).join(','));
 
+    console.log('== P1 数据模型：draft → design 迁移 + 方案级锁定');
+    const designState = await page.evaluate(async ({ projectId, assetId }) => {
+      const doc = await window.WuyingWorkspace.open(projectId).read();
+      const asset = doc.assets[assetId];
+      const front = asset.design?.views?.front || {};
+      return {
+        hasDesign: !!asset.design,
+        keepsDraft: !!asset.draft,
+        revision: asset.design?.revision,
+        outlines: Object.keys(front.outlines || {}),
+        locks: asset.design?.locks,
+        lockCount: (asset.design?.locks && Object.keys(asset.design.locks).length) || 0,
+        boundsDepth: asset.design?.bounds?.depth,
+        referenceKept: !!front.reference
+      };
+    }, ids);
+    check('打开页面即生成 design 结构', designState.hasDesign && designState.keepsDraft);
+    check('三个部件都迁出闭合轮廓', JSON.stringify(designState.outlines) === JSON.stringify(['shade', 'stem', 'base']),
+      designState.outlines.join(','));
+    check('锁定迁到方案级 design.locks（base）', designState.locks && designState.locks.base === true && designState.lockCount === 1,
+      JSON.stringify(designState.locks));
+    check('bounds 深度从部件深度区间推导', designState.boundsDepth > 0, String(designState.boundsDepth));
+
+    // UI 切锁 → design.locks 与 draft 部件双写一致
+    await page.locator('#shapeParts li', { hasText: '灯罩' }).locator('button').click();
+    await page.locator('#toggleLock').click();
+    await sleep(400);
+    const lockAfter = await page.evaluate(async ({ projectId, assetId }) => {
+      const doc = await window.WuyingWorkspace.open(projectId).read();
+      const asset = doc.assets[assetId];
+      return { locks: asset.design.locks,
+        partLocked: asset.draft.parts.find(p => p.id === 'shade').locked };
+    }, ids);
+    check('界面锁部件 → design.locks 落库', lockAfter.locks.shade === true, JSON.stringify(lockAfter.locks));
+    check('过渡期双写 draft 部件 locked', lockAfter.partLocked === true);
+    await page.locator('#toggleLock').click();
+    await sleep(400);
+    const unlockAfter = await page.evaluate(async ({ projectId, assetId }) => {
+      const doc = await window.WuyingWorkspace.open(projectId).read();
+      const asset = doc.assets[assetId];
+      return { locks: asset.design.locks,
+        partLocked: asset.draft.parts.find(p => p.id === 'shade').locked };
+    }, ids);
+    check('解锁 → design.locks 移除且部件同步', !unlockAfter.locks.shade && unlockAfter.partLocked === false,
+      JSON.stringify(unlockAfter.locks));
+    // 刷新后不重复迁移（幂等）
+    await page.reload();
+    await page.waitForSelector('#shapeShell:not([hidden])', { timeout: 20000 });
+    await sleep(400);
+    const designStill = await page.evaluate(async ({ projectId, assetId }) => {
+      const doc = await window.WuyingWorkspace.open(projectId).read();
+      return { revision: doc.assets[assetId].design.revision, hasDraft: !!doc.assets[assetId].draft };
+    }, ids);
+    check('刷新后 design 保留、不重复迁移', designStill.hasDraft && designStill.revision === designState.revision,
+      designStill.revision);
+
     check('体块预览窗可见', await page.locator('#shapePeek').isVisible());
     const peekFaces = await page.locator('#peekSvg polygon').count();
     check('体块预览有面片 (' + peekFaces + ')', peekFaces > 4);

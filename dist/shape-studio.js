@@ -3,7 +3,7 @@
   if (!await window.WuyingLocalWorkspace.requireProject()) return;
   const $=id=>document.getElementById(id);
   const model=window.WuyingShapeModel, flow=window.WuyingWorkflow;
-  const stageBook=window.WuyingFlowStages;
+  const stageBook=window.WuyingFlowStages, designModel=window.WuyingDesignModel;
   const projects=window.WuyingProjects, project=projects.get(projects.idFromLocation());
   const id=new URLSearchParams(location.search).get('asset');
   const canvas=$('shapeCanvas'), svgNS='http://www.w3.org/2000/svg';
@@ -421,7 +421,12 @@
   $('toggleLock').onclick=()=>void task(async()=>{
     const part=active();
     if(!part) return;
-    await saveDraft((items,source)=>model.updatePart(items,part.id,{locked:!part.locked},source),
+    await saveDraft((items,source)=>{
+      // P1：锁定写入方案级 design.locks（唯一真实源），同时双写 draft 部件的 locked，
+      // 让像素链路（editRegion/renderRegion 保护区）在过渡期继续工作
+      designModel.applyLock(source,part.id,!part.locked);
+      return model.updatePart(items,part.id,{locked:!part.locked},source);
+    },
       part.locked?'已解除 '+part.name+' 的锁定。':'已锁定 '+part.name+'。');
   });
   $('removePart').onclick=()=>void task(async()=>{
@@ -733,6 +738,14 @@
           }
         });
         show('已为旧草稿的部件补全厚度与深度位置。');
+      }
+      // P1 数据模型迁移：draft → design（方案级锁定表 + 正视轮廓节点），draft 保留一个周期
+      if(designModel.needsMigration(asset())){
+        doc=await store.change(current=>{
+          const target=current.assets[id];
+          if(target&&designModel.migrate(target)) target.updatedAt=Date.now();
+        });
+        show('部件草稿已迁移到方案结构 design，锁定改存方案级锁定表。');
       }
       $('shapeBack').href=toBoard(id);
       $('shapeImage').href=toImage(id);$('shapeImage').hidden=false;

@@ -10,6 +10,7 @@
   const boardUrl = project ? 'workbench.html?project=' + encodeURIComponent(projectId) : 'files.html';
   const boardSelection = boardUrl + (project && assetId ? '&asset=' + encodeURIComponent(assetId) : '');
   const flow = window.WuyingWorkflow, variations = window.WuyingVariationControls;
+  const designModel = window.WuyingDesignModel;
   const compose = window.WuyingWorkspaceComposite;
   const regions = window.WuyingImageSelection;
   const stage = $('#studioStage');
@@ -1610,6 +1611,13 @@
       store = window.WuyingWorkspace.open(projectId);
       doc = await store.read();
       if (!asset()) throw new Error('找不到这张图。');
+      // P1 数据模型迁移：带旧部件草稿的方案，打开时一次性生成 design 结构（保留 draft 回退）
+      if (designModel.needsMigration(asset())) {
+        doc = await store.change(current => {
+          const target = current.assets[assetId];
+          if (target && designModel.migrate(target)) target.updatedAt = Date.now();
+        });
+      }
       settings = await flow.modelPrefs() || {};
       $('#studioShell').hidden = false;
       // 阶段轨道：支持 ?stage= 直达（精细微调返回三视图等），并持久化到 asset.flow.stage。

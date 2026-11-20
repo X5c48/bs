@@ -19,6 +19,7 @@
   <script src="workspace-render.js" defer></script>
   <script src="workspace-workflow.js" defer></script>
   <script src="flow-stages.js" defer></script>
+  <script src="vectorize.js" defer></script>
   <script src="shape-studio.js" defer></script>
 </head>
 <body>
@@ -53,6 +54,7 @@
         <label id="triToggleWrap" hidden><input id="triToggle" type="checkbox"> 三视图</label>
         <label id="referenceToggle" hidden><input id="showReference" type="checkbox" checked> 底图</label>
         <button type="button" id="loadExample" hidden>载入台灯示例</button>
+        <button type="button" id="vectorize" hidden title="把底图里闭合的线稿轮廓自动拆成部件">矢量化底图</button>
       </div>
       <div class="shape-stage">
         <div class="shape-sheet" id="shapeSheet">
@@ -67,7 +69,7 @@
       <p id="shapeHint" class="shape-hint"></p>
     </section>
     <aside class="shape-properties" aria-label="部件参数与推敲">
-      <header class="shape-section-head"><h2 id="partTitle">部件参数</h2><button type="button" id="toggleLock" hidden></button></header>
+      <header class="shape-section-head"><h2 id="partTitle">部件参数</h2><button type="button" id="toggleLock" hidden></button><button type="button" id="lockOthers" hidden title="锁定除当前部件以外的全部部件">锁定其余</button></header>
       <p id="choosePart" class="shape-muted">添加或选中一个部件，查看它的位置、尺寸和角度。</p>
       <div id="shapePartDetails" hidden>
         <form id="partForm">

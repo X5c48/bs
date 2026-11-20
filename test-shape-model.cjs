@@ -111,3 +111,52 @@ test('block faces are sorted far to near, lit, and flip visibility with pitch',(
 });
 
 
+
+test('moveNode：合法移动只改目标节点，入参不被修改',()=>{
+  const hex=[{x:0,y:-.5},{x:.5,y:-.25},{x:.5,y:.25},{x:0,y:.5},{x:-.5,y:.25},{x:-.5,y:-.25}];
+  const part=parts.createPart('p','polygon','六边形',{x:300,y:300,width:200,height:200,angle:0,points:hex},size);
+  const moved=parts.moveNode(part,0,{x:0,y:-.3});
+  assert.equal(moved.ok,true);
+  assert.deepEqual(moved.part.points[0],{x:0,y:-.3});
+  moved.part.points.slice(1).forEach((point,index)=>assert.deepEqual(point,part.points[index+1]));
+  assert.deepEqual(part.points[0],hex[0]);
+  // 拖出包围盒的坐标被钳回边界（用「房子」五边形拖一个角到边界，形状仍合法）
+  const house=[{x:0,y:-.5},{x:.5,y:0},{x:.35,y:.5},{x:-.35,y:.5},{x:-.5,y:0}];
+  const tent=parts.createPart('t','polygon','房子',{x:300,y:300,width:200,height:200,angle:0,points:house},size);
+  const clamped=parts.moveNode(tent,3,{x:-9,y:9});
+  assert.equal(clamped.ok,true,'钳回边界后应保持合法');
+  assert.deepEqual(clamped.part.points[3],{x:-.5,y:.5});
+});
+
+test('moveNode：自交时拒绝（自动回退），锁定与非描线部件报错',()=>{
+  // U 形凹多边形：把内凹角拖到另一条腿上必然自交
+  const u=[{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:.1,y:.5},
+    {x:.1,y:0},{x:-.1,y:0},{x:-.1,y:.5},{x:-.5,y:.5}];
+  const part=parts.createPart('u','polygon','U 形',{x:300,y:300,width:200,height:200,angle:0,points:u},size);
+  let crossed=0,okCount=0;
+  const reasons=new Set();
+  for(let y=-.5;y<=.5;y+=.1){
+    for(let x=-.5;x<=.5;x+=.1){
+      const result=parts.moveNode(part,4,{x,y});
+      if(!result.ok){ reasons.add(result.reason); if(result.reason==='crossing') crossed++; }
+      else okCount++;
+    }
+  }
+  assert.ok(crossed>0,'凹多边形拖节点必须触发自交防护：crossing '+crossed+'，失败原因 '+[...reasons].join('/'));
+  assert.ok(okCount>0,'也要保留一批合法位置');
+  // 锁定部件不许拖节点
+  const locked={...part,locked:true};
+  assert.throws(()=>parts.moveNode(locked,0,{x:0,y:0}),/已锁定/);
+  // 矩形部件没有节点
+  const box=parts.createPart('b','rectangle','矩形',{x:300,y:300,width:80,height:80,depth:20,angle:0},size);
+  assert.throws(()=>parts.moveNode(box,0,{x:0,y:0}),/只有描线部件/);
+});
+
+test('updatePart 支持描线部件更新 points 并做合法性校验',()=>{
+  const square=[{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}];
+  const part=parts.createPart('s','polygon','方块',{x:300,y:300,width:160,height:160,angle:0,points:square},size);
+  const next=parts.updatePart([part],'s',{points:[{x:-.4,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}]},size)[0];
+  assert.deepEqual(next.points[0],{x:-.4,y:-.5});
+  // 越界坐标会被 validate 拒绝（轮廓超出画布）
+  assert.throws(()=>parts.updatePart([part],'s',{points:[{x:-9,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}]},size),/超出画布/);
+});

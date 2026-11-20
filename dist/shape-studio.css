@@ -120,6 +120,12 @@ fieldset{min-width:0;border:0;margin:0;padding:0}
 .view-label { fill: var(--quiet, #6e6b7e); font-size: 12px; font-family: var(--font, inherit); }
 .shape-stroke[data-locked="true"] { stroke-dasharray: 5 3; }
 .shape-handle { fill: #fff; stroke: var(--blue, #5645bb); stroke-width: 1.3; }
+/* P2 节点手柄：描线部件的锚点，可拖改轮廓 */
+.shape-node { fill: #fff; stroke: #5645bb; stroke-width: 1.4; }
+.shape-node:hover { fill: #d9d5ff; }
+.shape-node.is-invalid { fill: #f3d7d9; stroke: #b23b47; }
+/* 自交/退化时轮廓变红提示（松手自动退回上一合法形状） */
+.shape-stroke.is-invalid { fill: #f9e3e4; stroke: #b23b47; stroke-width: 2.4; }
 .shape-stage { position: relative; }
 .shape-peek { position: absolute; right: 18px; bottom: 18px; width: 218px; background: var(--surface, #fff); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px #100e1540; overflow: hidden; z-index: 5; }
 .shape-peek header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 11.5px; }

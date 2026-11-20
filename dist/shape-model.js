@@ -82,6 +82,8 @@
     else{
       for(const key of fields) if(Object.hasOwn(patch,key)) next[key]=round(patch[key]);
       for(const key of ['depth','z']) if(Object.hasOwn(patch,key)) next[key]=round(patch[key]);
+      // 描线部件拖节点：points 是归一化局部坐标，只对多边形开放
+      if(Array.isArray(patch.points)&&next.shape==='polygon') next.points=clone(patch.points);
       if(Object.hasOwn(patch,'name')){
         next.name=String(patch.name||'').trim().slice(0,60);
         if(!next.name) throw new Error('请填写部件名称。');
@@ -115,6 +117,21 @@
     }
     if(!result.length) throw new Error('候选超出画布或参数范围，请减小变动幅度。');
     return result;
+  }
+
+  // 拖动描线部件的一个节点（归一化局部坐标，钳在部件包围盒内）。
+  // 自交/退化时返回 {ok:false,reason}，调用方据此丢弃本次移动（自动回退到上一合法形状）。
+  function moveNode(part,index,local){
+    if(part.shape!=='polygon'||!Array.isArray(part.points)) throw new Error('只有描线部件可以拖动节点。');
+    if(part.locked) throw new Error('该部件已锁定，请先解除锁定。');
+    if(!Number.isInteger(index)||index<0||index>=part.points.length) throw new Error('节点不存在。');
+    const clampLocal=value=>Math.min(.5,Math.max(-.5,value));
+    const points=part.points.map((point,i)=>i===index
+      ?{x:round(clampLocal(local.x)),y:round(clampLocal(local.y))}:point);
+    const nodes=points.map(point=>({point,in:point,out:point}));
+    const check=rules.inspect({closed:true,nodes});
+    if(!check.ok) return {ok:false,reason:check.reason==='crossing'?'crossing':'invalid'};
+    return {ok:true,part:{...part,points:clone(points)}};
   }
 
   function diff(base,next){
@@ -231,7 +248,7 @@
     return part.x*sa+part.z*ca;
   }
 
-  return {labels,shapeNames,caption,polygon,createPart,tracePart,updatePart,removePart,variants,diff,editRegion,snapshot,
+  return {labels,shapeNames,caption,polygon,createPart,tracePart,updatePart,removePart,variants,diff,editRegion,snapshot,moveNode,
     needsNormalize,normalizeParts,sideRect,topRect,depthSpan,blockFaces,blockDepth,defaultDepth};
 });
 

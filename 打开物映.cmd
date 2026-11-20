@@ -22,7 +22,7 @@ powershell.exe -NoProfile -Command ^
   "$comfy = 'D:\Comfy-Desktop\ComfyUI-Installs\毕设\ComfyUI';" ^
   "if ((Test-Path (Join-Path $comfy 'main.py')) -and -not (Get-NetTCPConnection -State Listen -LocalPort 8188 -ErrorAction SilentlyContinue)) {" ^
   "  Write-Output 'Starting ComfyUI (Bishe install) on 8188...';" ^
-  "  Start-Process -FilePath (Join-Path $comfy '.venv\Scripts\python.exe') -ArgumentList 'main.py','--listen','127.0.0.1','--port','8188','--enable-cors-header','*','--output-directory','D:\Comfy-Desktop\ComfyUI-Shared\output','--input-directory','D:\Comfy-Desktop\ComfyUI-Shared\input' -WorkingDirectory $comfy -WindowStyle Minimized;" ^
+  "  Start-Process -FilePath (Join-Path $comfy '.venv\Scripts\python.exe') -ArgumentList 'main.py','--listen','127.0.0.1','--port','8188','--enable-cors-header','*' -WorkingDirectory $comfy -WindowStyle Minimized;" ^
   "}" ^
   "Write-Output $url; if ($env:WUYING_PREVIEW_MODE -ne '--no-browser') { Start-Process $url }"
 if errorlevel 1 (

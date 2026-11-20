@@ -29,7 +29,7 @@ node --test *.cjs
 
 ## 渲染后端
 
-- **本机 ComfyUI**（推荐）：SD1.5 / CyberRealistic + Scribble/Lineart/Canny ControlNet 实时渲染；Qwen-Image-2.1 高质量出图（模型放 `D:\毕设\models`，挂载配置见 `comfy-extra-model-paths.yaml`）
+- **本机 ComfyUI**（推荐）：SD1.5 / CyberRealistic + Scribble/Lineart/Canny ControlNet 实时渲染；Qwen-Image-2.1 高质量出图（三件套在 `ComfyUI-Installs\毕设\ComfyUI\models`，基础模型只读引用 `ComfyUI-Shared\models`）
 - **Images API 兼容**：OpenAI 官方 / apilio.ai 中转，支持 `image` 与 `image[]` 两种字段格式
 - **RunningHub**：云端工作流
 
@@ -48,6 +48,6 @@ dist/           前端（零构建静态站）
 server/         Node 服务端（8881/8882）
 tools/          工具脚本
 test-*.cjs      单元测试（node --test）
-comfy-extra-model-paths.yaml  ComfyUI 模型挂载配置
+开源集成/启动ComfyUI（毕设）.cmd  ComfyUI 启动（毕设安装，端口 8188）
 legacy-backup-2026-11-17/  旧版备份
 ```

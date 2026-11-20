@@ -6,3 +6,4 @@ verify-workbench.cjs
 /workbench.png
 /workbench-mobile.png
 .wuying-local/
+.openai/

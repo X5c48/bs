@@ -497,3 +497,46 @@ test('方案主题编译：自动方向、主体锁定、自定义覆盖', () =>
   assert.match(manual, /fixed main subject/);
   assert.match(themeDirective({ text: '有主题', custom: '   ' }), /有主题/);
 });
+
+test('Qwen-Image-2.1 路由：整图渲染走专用通道，实时帧与选区重绘被拦截', async () => {
+  const png = new Blob(['source'], { type: 'image/png' });
+  const calls = [];
+  const window = {
+    WuyingImageSelection: { enough: points => points.length >= 3, prepare: async () => ({ sourceImage: png, maskImage: png }), composite: async (p, blob) => blob },
+    WuyingComfy: {
+      renderQwen: async options => { calls.push(['qwen', options]); return { blob: new Blob(['qwenhd'], { type: 'image/png' }) }; },
+      renderLive: async options => { calls.push(['live', options]); return { blob: new Blob(['sd'], { type: 'image/png' }) }; }
+    }
+  };
+  const context = vm.createContext({ window, AbortController, setTimeout, clearTimeout, structuredClone, Blob,
+    createImageBitmap: async () => ({ width: 64, height: 48, close() {} }),
+    document: { createElement: () => ({ width: 0, height: 0, getContext: () => ({ fillRect() {}, drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray() }) }), toBlob: cb => cb(new Blob(['x'], { type: 'image/png' })) }) } });
+  vm.runInContext(fs.readFileSync(__dirname + '/dist/workspace-render.js', 'utf8'), context);
+  const { generate } = window.WuyingWorkspaceRender;
+  const qwen = 'qwen_image_2.1_turbo_int8_convrot.safetensors';
+
+  // 1. 整图渲染：走 renderQwen，提示词含意图，源图作为参考
+  const out = await generate({ kind: 'render', provider: 'comfy', source: png, endpoint: 'http://localhost:8188', checkpoint: qwen, prompt: 'a lamp', seed: 3 });
+  assert.equal(await out.text(), 'qwenhd');
+  assert.equal(calls[0][0], 'qwen');
+  assert.equal(calls[0][1].checkpoint, qwen);
+  assert.match(calls[0][1].prompt, /^a lamp .*supplied sketch/);
+  assert.equal(calls[0][1].sourceImage, png);
+  assert.match(calls[0][1].negative, /lowres/);
+
+  // 2. live:true 仍走 SD1.5 renderLive（qwen 不参与实时）
+  calls.length = 0;
+  await generate({ kind: 'render', provider: 'comfy', live: true, source: png, endpoint: 'http://localhost:8188', checkpoint: qwen, prompt: 'a lamp', controlnet: 'scribble.safetensors' });
+  assert.equal(calls[0][0], 'live');
+  assert.equal(calls.length, 1);
+
+  // 3. 选区重绘 + qwen → 明确报错
+  await assert.rejects(generate({ kind: 'modify', provider: 'comfy', source: png, endpoint: 'http://localhost:8188', checkpoint: qwen, prompt: 'x', selection: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }), /选区重绘请换 SD1\.5/);
+  assert.equal(calls.length, 1);
+
+  // 4. SD1.5 checkpoint 不受影响
+  calls.length = 0;
+  await generate({ kind: 'render', provider: 'comfy', source: png, endpoint: 'http://localhost:8188', checkpoint: 'v1-5.safetensors', prompt: 'a lamp', controlnet: 'scribble.safetensors', live: false });
+  assert.equal(calls[0][0], 'live');
+  assert.equal(calls.length, 1);
+});

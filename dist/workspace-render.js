@@ -390,6 +390,20 @@
     const shared = { endpoint, checkpoint, prompt, seed, slot, signal, onStatus };
     signal?.throwIfAborted();
 
+    // Qwen-Image-2.1 高质量整图通道：分体式 diffusion 模型走专用工作流；实时帧仍用 SD1.5 ControlNet。
+    if (/^qwen[_ ]?image[_ ]?2\.?1/i.test(String(checkpoint || '')) && !options.live) {
+      if (editRegion) throw new Error('选区重绘请换 SD1.5 模型；Qwen-Image-2.1 支持整图渲染与改稿。');
+      signal?.throwIfAborted();
+      const { blob } = await comfy.renderQwen({ ...shared, negative: 'lowres, worst quality, low quality, blurry, watermark, unwanted text, clutter', sourceImage: source });
+      signal?.throwIfAborted();
+      const size = options.size;
+      if (size) {
+        const got = await sizeOf(blob);
+        if (got.width !== size.width || got.height !== size.height) return fitTo(blob, size.width, size.height);
+      }
+      return blob;
+    }
+
     if (editRegion) {
       onStatus?.('正在准备源图和选区遮罩…');
       const prepared = await mask.prepare(source, selection, options.protectedAreas);

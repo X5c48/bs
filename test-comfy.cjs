@@ -121,11 +121,14 @@ test('lists installed model choices through native routes', async (t) => {
     if (url === 'https://comfy.example/proxy/models/checkpoints') {
       return Response.json(['sd15.safetensors']);
     }
+    if (url === 'https://comfy.example/proxy/models/diffusion_models') {
+      return new Response(null, { status: 404 });
+    }
     assert.equal(url, 'https://comfy.example/proxy/models/controlnet');
     return Response.json(['scribble.safetensors']);
   });
   assert.deepEqual(await testConnection('https://comfy.example/proxy/'), {
-    checkpoints: ['sd15.safetensors'], controlnets: ['scribble.safetensors']
+    checkpoints: ['sd15.safetensors'], controlnets: ['scribble.safetensors'], qwen: []
   });
 });
 
@@ -467,4 +470,94 @@ test('高清增强档：latent 跟随档位，二次采样固定放大到 1280×
   const hd = scales.find(n => n.inputs.width === 1280);
   assert.ok(hd, 'CyberRealistic 高清档必须有 1280×1024 的 lanczos 放大');
   assert.equal(hd.inputs.upscale_method, 'lanczos');
+});
+
+test('Qwen-Image-2.1 工作流：Turbo 8 级 sigma、CFG 1、latent 取编码器输出、保存节点对齐', () => {
+  const { qwenWorkflow } = require('./dist/comfy.js');
+  const graph = qwenWorkflow({ checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp', seed:7 });
+  assert.equal(graph['1'].class_type, 'UNETLoader');
+  assert.equal(graph['1'].inputs.unet_name, 'qwen_image_2.1_turbo_int8_convrot.safetensors');
+  assert.equal(graph['3'].class_type, 'CLIPLoader');
+  assert.equal(graph['3'].inputs.type, 'qwen_image');
+  assert.equal(graph['3'].inputs.clip_name, 'qwen3vl_8b_int8_convrot.safetensors');
+  const encode = graph['5'];
+  assert.equal(encode.class_type, 'TextEncodeQwenImage21');
+  assert.equal(encode.inputs.resolution, 1024);
+  assert.ok(!('images' in encode.inputs), '无参考时不应带 images');
+  const guider = graph['8'];
+  assert.equal(guider.class_type, 'CFGGuider');
+  assert.equal(guider.inputs.cfg, 1);
+  assert.deepEqual(guider.inputs.positive, ['5', 0]);
+  assert.deepEqual(guider.inputs.negative, ['5', 1]);
+  const sigmas = graph['9'].inputs.sigmas.split(',').map(Number);
+  assert.equal(sigmas.length, 9, 'turbo 固定 8 步（9 级 sigma）');
+  const sampler = graph['10'];
+  assert.equal(sampler.class_type, 'SamplerCustomAdvanced');
+  assert.deepEqual(sampler.inputs.latent_image, ['5', 2], 'latent 必须取编码器输出，跟随参考图长宽比');
+  assert.equal(graph['11'].class_type, 'SaveImage');
+  assert.equal(graph['11'].inputs.filename_prefix, 'Wuying/qwen21');
+  assert.equal(graph['14'], undefined);
+});
+
+test('Qwen-Image-2.1 带参考图：LoadImage 供图且以 autogrow 字典接到编码器 images 槽', () => {
+  const { qwenWorkflow } = require('./dist/comfy.js');
+  const graph = qwenWorkflow({ checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp', reference:'wuying-live/input-1.png [temp]', seed:1 });
+  assert.equal(graph['14'].class_type, 'LoadImage');
+  assert.equal(graph['14'].inputs.image, 'wuying-live/input-1.png [temp]');
+  assert.deepEqual(graph['5'].inputs.images, { image_1: ['14', 0] });
+});
+
+test('Qwen-Image-2.1 校验：非 qwen 模型、缺提示词、缺端点都要拦截', async () => {
+  const { renderQwen } = require('./dist/comfy.js');
+  await assert.rejects(renderQwen({ endpoint:'http://localhost:8188', checkpoint:'v1-5.safetensors', prompt:'x' }), /Qwen-Image-2\.1/);
+  await assert.rejects(renderQwen({ endpoint:'http://localhost:8188', checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'  ' }), /画面描述/);
+  await assert.rejects(renderQwen({ endpoint:'', checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'x' }), /ComfyUI/);
+});
+
+test('Qwen-Image-2.1 渲染：上传参考图后提交正确工作流并取回结果', async t => {
+  const { renderQwen } = require('./dist/comfy.js');
+  let submitted;
+  const fetch = t.mock.method(global, 'fetch', async (url, init) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/upload/image') return Response.json({ name:'lamp.png', type:'temp', subfolder:'wuying-live' });
+    if (pathname === '/prompt') {
+      submitted = JSON.parse(init.body).prompt;
+      return Response.json({ prompt_id:'qwen-job' });
+    }
+    if (pathname === '/history/qwen-job') return Response.json({ 'qwen-job': { outputs: { '11': { images: [{ filename:'qwen.png' }] } } } });
+    if (pathname === '/view') return new Response(resultImage);
+    throw new Error('Unexpected route ' + pathname);
+  });
+  const result = await renderQwen({ endpoint, checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp', sourceImage:sketch, seed:42, slot:'live-x' });
+  assert.equal(await result.blob.text(), 'rendered image');
+  assert.equal(submitted['5'].class_type, 'TextEncodeQwenImage21');
+  assert.equal(submitted['14'].class_type, 'LoadImage');
+  assert.ok(submitted['14'].inputs.image.startsWith('wuying-live/lamp.png'));
+  assert.equal(submitted['7'].inputs.noise_seed, 42);
+  fetch.mock.restore();
+});
+
+test('连接检测把 Qwen-Image-2.1 diffusion 模型并入基础模型列表，老版本端点缺失可容错', async t => {
+  const { testConnection } = require('./dist/comfy.js');
+  for (const [diffusion, expectQwen] of [
+    [[{ not:'array' }], false],
+    [['sd_xl.safetensors', 'qwen_image_2.1_turbo_int8_convrot.safetensors'], true],
+    [['only_sd.safetensors'], false]
+  ]) {
+    const fetch = t.mock.method(global, 'fetch', async url => {
+      const { pathname } = new URL(url);
+      if (pathname === '/models/checkpoints') return Response.json(['v1-5.safetensors']);
+      if (pathname === '/models/controlnet') return Response.json(['scribble.safetensors']);
+      if (pathname === '/models/diffusion_models') {
+        if (Array.isArray(diffusion)) return Response.json(diffusion);
+        return new Response(null, { status: 404 });
+      }
+      throw new Error('Unexpected route ' + pathname);
+    });
+    const found = await testConnection('http://localhost:8188');
+    fetch.mock.restore();
+    assert.equal(found.checkpoints.includes('qwen_image_2.1_turbo_int8_convrot.safetensors'), expectQwen);
+    assert.equal(found.checkpoints[0], 'v1-5.safetensors');
+    assert.equal(found.qwen.length, expectQwen ? 1 : 0);
+  }
 });

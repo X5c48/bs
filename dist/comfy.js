@@ -76,15 +76,22 @@
 
   async function testConnection(endpoint, { signal } = {}) {
     const base = endpointBase(endpoint);
-    const [checkpoints, controlnets] = await Promise.all([
+    const [checkpoints, controlnets, diffusion] = await Promise.all([
       request(base, '/models/checkpoints', signal),
-      request(base, '/models/controlnet', signal)
+      request(base, '/models/controlnet', signal),
+      request(base, '/models/diffusion_models', signal).catch(error => {
+        if (error.status === 404) return [];
+        throw error;
+      })
     ]);
     if (!Array.isArray(checkpoints) || !Array.isArray(controlnets)
         || [...checkpoints, ...controlnets].some((name) => typeof name !== 'string')) {
       throw new Error('ComfyUI 返回了无效的模型列表。');
     }
-    return { checkpoints, controlnets };
+    // 分体式 Qwen-Image-2.1（diffusion + Qwen3VL 编码器 + VAE）合并进基础模型下拉。
+    const qwen = (Array.isArray(diffusion) ? diffusion : [])
+      .filter(name => typeof name === 'string' && /^qwen[_ ]?image[_ ]?2\.?1/i.test(name.split(/[\\/]/).at(-1)));
+    return { checkpoints: [...checkpoints, ...qwen], controlnets, qwen };
   }
 
   async function testKreaConnection(endpoint, { signal } = {}) {
@@ -358,6 +365,53 @@
       build: () => kreaWorkflow({ quality, prompt, seed, krea }) });
   }
 
+  // Qwen-Image-2.1（分体式 diffusion + Qwen3VL 编码器 + VAE，Turbo 8 级 sigma，CFG 1）。
+  // 源图走 TextEncodeQwenImage21 的参考图槽，由 DiT 拼接画面内容；latent 取编码器输出，
+  // 输出尺寸自动跟随参考图长宽比（以 resolution 为基准做 32 对齐）。
+  function qwenWorkflow({ checkpoint, clip = 'qwen3vl_8b_int8_convrot.safetensors', vae = 'qwen_image_2.1_vae_bf16.safetensors', prompt, negative = '', reference, seed = 0, resolution = 1024 }) {
+    const node = (class_type, inputs) => ({ class_type, inputs });
+    const graph = {
+      '1': node('UNETLoader', { unet_name: checkpoint, weight_dtype: 'default' }),
+      '2': node('QwenImage21Cache', { model: ['1', 0], device: 'auto', dtype: 'default' }),
+      '3': node('CLIPLoader', { clip_name: clip, type: 'qwen_image', device: 'default' }),
+      '4': node('VAELoader', { vae_name: vae }),
+      '5': node('TextEncodeQwenImage21', { clip: ['3', 0], prompt, negative_prompt: negative, resolution }),
+      '6': node('KSamplerSelect', { sampler_name: 'euler' }),
+      '7': node('RandomNoise', { noise_seed: seed, noise_mode: 'fixed' }),
+      '8': node('CFGGuider', { model: ['2', 0], cfg: 1, positive: ['5', 0], negative: ['5', 1] }),
+      '9': node('ManualSigmas', { sigmas: '1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0' }),
+      '10': node('SamplerCustomAdvanced', { noise: ['7', 0], guider: ['8', 0], sampler: ['6', 0], sigmas: ['9', 0], latent_image: ['5', 2] }),
+      '12': node('VAEDecode', { samples: ['10', 0], vae: ['4', 0] }),
+      '11': node('SaveImage', { images: ['12', 0], filename_prefix: 'Wuying/qwen21' })
+    };
+    if (reference) {
+      graph['14'] = node('LoadImage', { image: reference });
+      // images 是 autogrow 字典输入：{image_1: [节点, 槽位]}。
+      graph['5'].inputs.images = { image_1: ['14', 0] };
+    }
+    return graph;
+  }
+
+  async function renderQwen(options) {
+    const { endpoint, checkpoint, prompt, negative = '', sourceImage, slot, signal, onStatus } = options;
+    if (typeof endpoint !== 'string' || !endpoint.trim()) throw new Error('请先连接 ComfyUI。');
+    if (typeof checkpoint !== 'string' || !/^qwen[_ ]?image[_ ]?2\.?1/i.test(checkpoint.trim())) {
+      throw new Error('请选择 Qwen-Image-2.1 系列模型。');
+    }
+    if (typeof prompt !== 'string' || !prompt.trim()) throw new Error('请先输入画面描述。');
+    if (sourceImage && (!(sourceImage instanceof Blob) || !sourceImage.size || sourceImage.type !== 'image/png')) {
+      throw new Error('参考图需要有效的 PNG 数据。');
+    }
+    const resolution = Number.isInteger(options.resolution) && options.resolution >= 256 && options.resolution <= 4096
+      ? options.resolution : 1024;
+    const seed = Number.isInteger(options.seed) && options.seed >= 0
+      ? options.seed : crypto.getRandomValues(new Uint32Array(1))[0];
+    return runWorkflow({
+      endpoint, inputBlob: sourceImage || null, slot, signal, onStatus, pollInterval: 600,
+      build: reference => qwenWorkflow({ checkpoint: checkpoint.trim(), prompt, negative, reference, seed, resolution })
+    });
+  }
+
   function regionWorkflow({ checkpoint, prompt, denoise, seed, image, mask }) {
     const node = (class_type, inputs) => ({ class_type, inputs });
     const turbo = /(?:^|[._ -])turbo(?:[._ -]|$)/i.test(checkpoint);
@@ -448,7 +502,7 @@
       pollInterval:600,build:image=>imageToolWorkflow({kind,image,model,size})});
   }
 
-  const api = { testConnection, testKreaConnection, generate, renderLive, renderKrea, renderRegion, liveWorkflow, kreaWorkflow, runImageTool };
+  const api = { testConnection, testKreaConnection, generate, renderLive, renderQwen, renderKrea, renderRegion, liveWorkflow, qwenWorkflow, kreaWorkflow, runImageTool };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') window.WuyingComfy = api;
 }());

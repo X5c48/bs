@@ -467,6 +467,9 @@
     debounce:220,keepRunning:true,
     render:async(current,signal)=>{
       const model=flow.modelPrefs();
+      // 实时帧走 SD1.5 ControlNet 快速链路；Qwen-Image-2.1 是整图高质量通道，不支持实时。
+      if(/^qwen[_ ]?image[_ ]?2\.?1/i.test(model.checkpoint||''))
+        throw new Error('实时渲染需 SD1.5/SDXL 模型，Qwen-Image-2.1 请用「生成」按钮出高质量图。');
       const source=await compose.toPng(current,store);
       signal.throwIfAborted();
       return window.WuyingWorkspaceRender.generate({

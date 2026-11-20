@@ -29,7 +29,7 @@ node --test *.cjs
 
 ## 渲染后端
 
-- **本机 ComfyUI**（推荐）：SD1.5 / CyberRealistic + Scribble/Lineart/Canny ControlNet 实时渲染；Qwen-Image-2.1 高质量出图（三件套在 `ComfyUI-Installs\毕设\ComfyUI\models`，基础模型只读引用 `ComfyUI-Shared\models`）
+- **本机 ComfyUI**（推荐）：SD1.5 / CyberRealistic + Scribble/Lineart/Canny ControlNet 实时渲染；Qwen-Image-2.1 高质量出图（全部模型在 `ComfyUI-Installs\毕设\ComfyUI\models`，该安装自包含，与春序安装互不依赖）
 - **Images API 兼容**：OpenAI 官方 / apilio.ai 中转，支持 `image` 与 `image[]` 两种字段格式
 - **RunningHub**：云端工作流
 

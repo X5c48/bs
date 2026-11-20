@@ -82,11 +82,11 @@
     return {gap,span,side:{x:current.width+gap,w:depth},top:{y:current.height+gap,h:depth},
       width:current.width+gap+depth,height:current.height+gap+depth};
   }
-  function guideLine(x1,y1,x2,y2){
+  function guideLine(x1,y1,x2,y2,cls='view-sep'){
     const node=svg('line');
     node.setAttribute('x1',x1);node.setAttribute('y1',y1);
     node.setAttribute('x2',x2);node.setAttribute('y2',y2);
-    node.setAttribute('class','view-sep');
+    node.setAttribute('class',cls);
     return node;
   }
   function viewLabel(text,x,y){
@@ -145,6 +145,16 @@
       const {gap,span,side,top}=layout,current0=current;
       nodes.push(guideLine(current0.width+gap/2,0,current0.width+gap/2,current0.height));
       nodes.push(guideLine(0,current0.height+gap/2,current0.width,current0.height+gap/2));
+      // 视图对齐参考线：正视高度 ↔ 侧视高度、正视宽度 ↔ 俯视宽度（同源几何的直观证明）
+      const boxes=parts().map(part=>model.outlineBounds(shownOf(part)));
+      if(boxes.length){
+        const left=Math.min(...boxes.map(box=>box.x)),right=Math.max(...boxes.map(box=>box.x+box.width));
+        const topY=Math.min(...boxes.map(box=>box.y)),bottomY=Math.max(...boxes.map(box=>box.y+box.height));
+        nodes.push(guideLine(0,topY,side.x,topY,'view-align'));
+        nodes.push(guideLine(0,bottomY,side.x,bottomY,'view-align'));
+        nodes.push(guideLine(left,0,left,top.y,'view-align'));
+        nodes.push(guideLine(right,0,right,top.y,'view-align'));
+      }
       for(const part of parts()){
         const shown=shownOf(part);
         nodes.push(drawPolygon(shown,{selected:part.id===selected}));
@@ -157,7 +167,8 @@
       const spanRounded=Math.round(span.max-span.min);
       nodes.push(viewLabel('正视 '+current0.width+'×'+current0.height,current0.width/2,current0.height+gap*0.55));
       nodes.push(viewLabel('侧视 厚 '+spanRounded,side.x+side.w/2,current0.height+gap*0.55));
-      nodes.push(viewLabel('俯视 '+current0.width+'×'+spanRounded,current0.width/2,top.y+top.h+16));
+      // 俯视标签放在俯视格上方（放在下方会超出 viewBox 被裁掉）
+      nodes.push(viewLabel('俯视 '+current0.width+'×'+spanRounded,current0.width/2,top.y-10));
     }else{
       const invalid=gesture?.mode==='node'&&gesture.invalid===true;
       for(const part of parts()){
@@ -184,6 +195,15 @@
 
   // ── 体块预览小窗：部件包围盒挤出，与画布同步，可拖拽旋转 ──
   const peekSvg=$('peekSvg');
+  // 预览窗跟随画布右缘固定在视口内，避免页面滚动后跑到折叠线以下被裁切
+  function placePeek(){
+    const peek=$('shapePeek');
+    if(peek.hidden) return;
+    const rect=canvas.getBoundingClientRect();
+    peek.style.right=Math.max(12,Math.round(window.innerWidth-rect.right+12))+'px';
+    peek.style.bottom='12px';
+  }
+  window.addEventListener('resize',placePeek);
   function tint(hex,k){
     const n=parseInt(hex.slice(1),16),c=v=>Math.round(v*k);
     return 'rgb('+c(n>>16&255)+','+c(n>>8&255)+','+c(n&255)+')';
@@ -192,6 +212,7 @@
     const list=parts();
     $('shapePeek').hidden=!list.length;
     if(!list.length) return;
+    placePeek();
     const drawn=[...list]
       .sort((a,b)=>model.blockDepth(b,orbit.az)-model.blockDepth(a,orbit.az))
       .map(part=>({part,faces:model.blockFaces(part,orbit.az,orbit.el)}));
@@ -696,11 +717,57 @@
   $('partAiCancel').onclick=()=>controller?.abort();
 
   // ── 锁定感知实时辅助：只重渲选中的未锁定部件，锁定部件像素保持不变 ──
-  // 源图始终是进入微调时的底图（draft.reference），遮罩是选中部件的最新轮廓；
-  // 渲染完把补丁合成回底图预览，所以锁定的部件永远不会被改动。
+  // 源图始终是进入微调时的底图（draft.reference），遮罩是选中部件外扩后的轮廓
+  // （外扩是为了把旧轮廓的线条一起重绘掉）；条件图是新轮廓的栅格化线稿，走 ControlNet
+  // 锁住形状，避免模型自由发挥；渲染完把补丁合成回底图预览，锁定部件永不改动。
   let liveOn=false, liveBusy=false, liveTimer, liveController, liveSeed=crypto.getRandomValues(new Uint32Array(1))[0], liveUrl='';
   const liveParts=()=>{ const part=active(); return part&&!part.locked?{edit:part,locked:parts().filter(item=>item.locked&&item.id!==part.id)}:null; };
   const partPoints=(part,width,height)=>model.polygon(part).map(({x,y})=>({x:x/width,y:y/height}));
+  // 遮罩外扩：以质心为基准放大轮廓，让重绘覆盖到旧轮廓线（沿部件最小边的固定比例）
+  function dilatePolygon(points,factor=1.05){
+    const cx=points.reduce((sum,p)=>sum+p.x,0)/points.length;
+    const cy=points.reduce((sum,p)=>sum+p.y,0)/points.length;
+    return points.map(p=>({x:cx+(p.x-cx)*factor,y:cy+(p.y-cy)*factor}));
+  }
+  // 线稿条件图：把当前轮廓（含其他部件轮廓作上下文）栅格化到裁剪尺寸，喂给 ControlNet
+  function buildGuideBlob(prepared,edit,size){
+    const {crop}=prepared;
+    const width=Math.max(64,Math.round(crop.width/2)*2),height=Math.max(64,Math.round(crop.height/2)*2);
+    const sheet=document.createElement('canvas');
+    sheet.width=width;sheet.height=height;
+    const ctx=sheet.getContext('2d');
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);
+    const sx=width/crop.width,sy=height/crop.height;
+    const map=point=>({x:(point.x*size.width-crop.x)*sx,y:(point.y*size.height-crop.y)*sy});
+    const trace=points=>{
+      const mapped=points.map(map);
+      ctx.beginPath();
+      mapped.forEach((point,index)=>index?ctx.lineTo(point.x,point.y):ctx.moveTo(point.x,point.y));
+      ctx.closePath();
+      ctx.stroke();
+    };
+    ctx.lineJoin='round';ctx.lineCap='round';ctx.strokeStyle='#000';
+    ctx.lineWidth=Math.max(1.5,width/260);ctx.globalAlpha=.4;
+    for(const part of parts()) if(part.id!==edit.id) trace(model.polygon(part));
+    ctx.globalAlpha=1;
+    ctx.lineWidth=Math.max(3,width/110);
+    trace(model.polygon(edit));
+    return new Promise(resolve=>sheet.toBlob(resolve,'image/png'));
+  }
+  // ControlNet 解析：优先后台已选，否则从 ComfyUI 里挑一个 scribble/lineart
+  let controlnetCache=null;
+  async function resolveControlnet(prefs){
+    if(prefs.controlnet) return prefs.controlnet;
+    if(controlnetCache!==null) return controlnetCache;
+    try{
+      const base=(prefs.endpoint||'http://127.0.0.1:8188').replace(/\/+$/,'');
+      const response=await fetch(base+'/object_info/ControlNetLoader');
+      const data=await response.json();
+      const names=data?.ControlNetLoader?.input?.required?.control_net_name?.[0]||[];
+      controlnetCache=names.find(name=>/scribble|lineart|line[_-]art/i.test(name))||names[0]||'';
+    }catch{ controlnetCache=''; }
+    return controlnetCache;
+  }
   function liveState(message,error=false){
     $('liveState').textContent=message;
     $('liveState').dataset.error=String(error);
@@ -711,39 +778,100 @@
     clearTimeout(liveTimer);
     liveTimer=setTimeout(()=>void renderLiveShape(),500);
   }
+  // 结构条件渲染：把所有部件的当前轮廓画成一张结构图（灰面 + 深色边），
+  // 走 scribble ControlNet 出整图产品效果图。锁定部件因为轮廓就在结构图里，形态不会变。
+  function buildStructureBlob(size){
+    const sheet=document.createElement('canvas');
+    sheet.width=size.width;sheet.height=size.height;
+    const ctx=sheet.getContext('2d');
+    ctx.fillStyle='#fff';ctx.fillRect(0,0,sheet.width,sheet.height);
+    const draw=(part,fill,alpha)=>{
+      const points=model.polygon(part);
+      ctx.globalAlpha=alpha;
+      ctx.fillStyle=fill;
+      ctx.strokeStyle='#1d1d1f';
+      ctx.lineWidth=Math.max(3,size.width/260);
+      ctx.lineJoin='round';ctx.lineCap='round';
+      ctx.beginPath();
+      points.forEach((point,index)=>index?ctx.lineTo(point.x,point.y):ctx.moveTo(point.x,point.y));
+      ctx.closePath();
+      ctx.fill();ctx.stroke();
+      ctx.globalAlpha=1;
+    };
+    for(const part of parts()) draw(part,part.locked?'#c9c9cc':'#dedede',1);
+    return new Promise(resolve=>sheet.toBlob(resolve,'image/png'));
+  }
+  function livePrompt(subject){
+    return [
+      $('partPrompt').value.trim(),
+      subject||'product',
+      'front view product design render, single object centered, white and light gray matte plastic with brushed aluminum, bright clean studio background, soft shadows',
+      'clean industrial design, crisp edges, high detail'
+    ].filter(Boolean).join(', ');
+  }
+  const liveNegative='lowres, worst quality, low quality, jpeg artifacts, blurry, out of focus, watermark, text, extra objects, cluttered, deformed, sketch, lineart, outline, white background with black lines';
+  async function renderStructure(prefs,size,subject){
+    // 尺寸保持画布比例，长边 768（实时帧够快且细节够看）
+    const long=768;
+    const ratio=size.width/size.height;
+    const latentWidth=ratio>=1?long:Math.round(long*ratio/8)*8;
+    const latentHeight=ratio>=1?Math.round(long/ratio/8)*8:long;
+    const structure=await buildStructureBlob(size);
+    const controlnet=await resolveControlnet(prefs);
+    const {blob}=await window.WuyingComfy.renderLive({
+      endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,controlnet,
+      prompt:livePrompt(subject),negative:liveNegative,input:'sketch',quality:'live',
+      sourceImage:structure,strength:.9,seed:liveSeed,
+      latentWidth,latentHeight,tier:'balanced',
+      slot:'shape-live-'+id.slice(0,8),signal:liveController.signal,onStatus:()=>{}
+    });
+    return {blob,controlnet};
+  }
+  async function renderRegion(prefs,target,size,subject){
+    const sourceBlob=await store.getBlob(asset()?.draft?.reference?.blobId);
+    if(!sourceBlob) throw new Error('底图丢失，无法局部重绘。');
+    // 遮罩比轮廓外扩 5%，连旧轮廓线一起重绘，避免新旧边线叠影
+    const maskPoints=dilatePolygon(partPoints(target.edit,size.width,size.height),1.05);
+    const prepared=await window.WuyingImageSelection.prepare(sourceBlob,maskPoints,
+      target.locked.map(part=>partPoints(part,size.width,size.height)));
+    const guideBlob=await buildGuideBlob(prepared,target.edit,size);
+    const controlnet=await resolveControlnet(prefs);
+    const {blob}=await window.WuyingComfy.renderRegion({
+      endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,prompt:livePrompt(subject),
+      sourceImage:prepared.sourceImage,maskImage:prepared.maskImage,
+      guideImage:guideBlob,controlnet,controlStrength:.85,
+      denoise:Number($('liveStrength').value)/100,seed:liveSeed,
+      slot:'shape-live-'+id.slice(0,8),signal:liveController.signal,onStatus:()=>{}
+    });
+    return {blob:await window.WuyingImageSelection.composite(prepared,blob,{feather:6}),controlnet};
+  }
   async function renderLiveShape(){
     if(!liveOn) return;
-    const target=liveParts(), ref=asset()?.draft?.reference, prefs=flow.modelPrefs();
-    if(!target){liveState('选中一个未锁定的部件后，调整它才会实时更新。');return;}
-    if(!ref){liveState('这份草稿没有底图，先回图像编辑出图，再「拆成部件」。',true);return;}
+    const ref=asset()?.draft?.reference, prefs=flow.modelPrefs();
+    const mode=$('liveMode').value;
+    const target=liveParts();
+    // 结构渲染只需要部件结构，不必选中部件；局部重绘必须有选中的未锁定部件
+    if(mode==='region'&&!target){liveState('局部重绘需要先选中一个未锁定的部件。');return;}
+    if(!parts().length){liveState('还没有部件：先描轮廓或矢量化底图。',true);return;}
+    if(mode==='region'&&!ref){liveState('这份草稿没有底图，先回图像编辑出图，再「拆成部件」。',true);return;}
     if(liveBusy){scheduleLiveShape();return;}
     liveBusy=true;
     $('liveToggle').disabled=true;
-    liveState('正在渲染 '+target.edit.name+'…');
+    liveState(mode==='region'?'正在局部重绘 '+(target.edit.name)+'…':'正在按结构渲染…');
     liveController=new AbortController();
     try{
-      const sourceBlob=await store.getBlob(ref.blobId);
-      if(!sourceBlob) throw new Error('底图丢失，无法实时预览。');
       const size=asset();
-      const prepared=await window.WuyingImageSelection.prepare(sourceBlob,
-        partPoints(target.edit,size.width,size.height),
-        target.locked.map(part=>partPoints(part,size.width,size.height)));
-      const prompt=[
-        $('partPrompt').value.trim()||'Redraw the masked part with clean, credible product detailing.',
-        'Redraw only the masked part to match its edited outline; keep everything outside the mask pixel-identical.',
-        window.WuyingWorkspaceRender.themeDirective(asset()?.theme)
-      ].filter(Boolean).join(' ');
-      const {blob}=await window.WuyingComfy.renderRegion({
-        endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,prompt,
-        sourceImage:prepared.sourceImage,maskImage:prepared.maskImage,
-        denoise:Number($('liveStrength').value)/100,seed:liveSeed,
-        slot:'shape-live-'+id.slice(0,8),signal:liveController.signal,onStatus:()=>{}
-      });
-      const merged=await window.WuyingImageSelection.composite(prepared,blob,{feather:8});
+      const brief=asset()?.flow?.brief||{};
+      const subject=[brief.category,brief.text].filter(Boolean).join(', ');
+      const {blob,controlnet}=mode==='region'
+        ?await renderRegion(prefs,target,size,subject)
+        :await renderStructure(prefs,size,subject);
       if(liveUrl) URL.revokeObjectURL(liveUrl);
-      liveUrl=URL.createObjectURL(merged);
+      liveUrl=URL.createObjectURL(blob);
       $('liveImage').src=liveUrl;
-      liveState('已按最新轮廓更新 '+target.edit.name+'，锁定部件未改动。');
+      liveState(mode==='region'
+        ?'已按最新轮廓重绘 '+target.edit.name+(controlnet?'（线稿锁形）':'（提示词兜底）')+'，锁定部件像素未改动。'
+        :'已按当前结构渲染'+(controlnet?'（线稿锁形）':'（提示词兜底）')+'：所有部件轮廓与画布一致，锁定件形态不变。');
     }catch(error){
       if(liveController?.signal.aborted) liveState('已停止。');
       else liveState('渲染失败：'+error.message,true);
@@ -768,6 +896,7 @@
   $('liveRetry').onclick=()=>{ $('liveRetry').hidden=true; scheduleLiveShape(); };
   $('liveStrength').addEventListener('input',()=>{ $('liveStrengthValue').textContent=$('liveStrength').value+'%'; });
   $('liveStrength').addEventListener('change',scheduleLiveShape);
+  $('liveMode').addEventListener('change',scheduleLiveShape);
   $('partPrompt').addEventListener('input',scheduleLiveShape);
 
   // ── 阶段轨道：微调完成去三视图 / 回草图（P0：前进条件 + 冻结快照）──

@@ -180,13 +180,27 @@
     });
   }
 
-  // 侧视投影：横轴=深度，竖轴=高度（轮廓沿深度挤出，侧面看是 depth × 高度的矩形）
-  function sideRect(part){
-    return {x:part.z-part.depth/2,y:part.y-part.height/2,width:part.depth,height:part.height};
+  // 轮廓的轴对齐包围盒（已含旋转）。侧视/俯视与体块都用它，
+  // 保证「角度改了，三视图与体块仍是同一个物体」。
+  function outlineBounds(part){
+    const points=polygon(part);
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for(const {x,y} of points){
+      if(x<minX)minX=x; if(x>maxX)maxX=x;
+      if(y<minY)minY=y; if(y>maxY)maxY=y;
+    }
+    return {x:minX,y:minY,width:maxX-minX,height:maxY-minY};
   }
-  // 俯视投影：横轴=宽度，纵轴=深度
+
+  // 侧视投影：横轴=深度，竖轴=旋转后轮廓的高度区间
+  function sideRect(part){
+    const box=outlineBounds(part);
+    return {x:part.z-part.depth/2,y:box.y,width:part.depth,height:box.height};
+  }
+  // 俯视投影：横轴=旋转后轮廓的宽度区间，纵轴=深度
   function topRect(part){
-    return {x:part.x-part.width/2,y:part.z-part.depth/2,width:part.width,height:part.depth};
+    const box=outlineBounds(part);
+    return {x:box.x,y:part.z-part.depth/2,width:box.width,height:part.depth};
   }
   // 所有部件占用的深度区间（三视图格宽与对齐用）
   function depthSpan(parts){
@@ -199,46 +213,51 @@
     return {min,max};
   }
 
-  // 体块投影：部件包围盒长方体，绕竖直轴转 az、俯仰 el，返回可见面（远→近排序）
-  // 光照固定在左上前方，shade∈[0.3,1]，页面负责配色
+  // 体块投影（P2/P5）：把部件真实轮廓沿深度挤成棱柱，再按方位/俯仰投影。
+  // 与二维轮廓、侧/俯视同一份几何，所以转动角度时体块与三视图始终是同一个物体。
+  // 返回可见面（远→近），shade∈[0.3,1] 供页面配色。
   function blockFaces(part,az=0.5,el=0.42){
-    const hw=part.width/2,hh=part.height/2,hd=Math.max(4,part.depth)/2;
-    const corner=(dx,dy,dz)=>({x:part.x+dx*hw,y:part.y+dy*hh,z:part.z+dz*hd});
+    const outline=polygon(part);
+    if(outline.length<3) return [];
+    const half=Math.max(2,part.depth/2);
+    // 统一绕向：屏幕坐标下鞋带面积为正=顺时针，此时边 (dx,dy) 的外法线为 (dy,-dx)
+    let signed=0;
+    for(let i=0;i<outline.length;i++){
+      const a=outline[i],b=outline[(i+1)%outline.length];
+      signed+=a.x*b.y-b.x*a.y;
+    }
+    const ring=signed<0?[...outline].reverse():outline;
     const ca=Math.cos(az),sa=Math.sin(az),ce=Math.cos(el),se=Math.sin(el);
-    const project=p=>{
-      const x1=p.x*ca-p.z*sa,z1=p.x*sa+p.z*ca;
-      return {x:x1,y:p.y*ce-z1*se,d:p.y*se+z1*ce};
+    const project=(x,y,z)=>{
+      const x1=x*ca-z*sa,z1=x*sa+z*ca;
+      return {x:x1,y:y*ce-z1*se,d:y*se+z1*ce};
     };
-    const face=(id,normal,corners)=>({
-      id,
-      depth:corners.reduce((sum,p)=>sum+project(p).d,0)/4,
-      points:corners.map(project),
-      // 法线与光照都只做旋转（无平移）
-      normal:(()=>{
-        const nx=normal[0]*ca-normal[2]*sa,nz1=normal[0]*sa+normal[2]*ca;
-        return {x:nx,y:normal[1]*ce-nz1*se,z:normal[1]*se+nz1*ce};
-      })()
-    });
+    const rotateNormal=(nx,ny,nz)=>{
+      const rx=nx*ca-nz*sa,rz=nx*sa+nz*ca;
+      return {x:rx,y:ny*ce-rz*se,z:ny*se+rz*ce};
+    };
+    const light=rotateNormal(-0.45,-0.72,-0.53);
+    const faceOf=(id,normal,points3)=>{
+      const projected=points3.map(([x,y,z])=>project(x,y,z));
+      return {id,normal:rotateNormal(normal[0],normal[1],normal[2]),
+        depth:projected.reduce((sum,p)=>sum+p.d,0)/projected.length,points:projected};
+    };
     const faces=[
-      face('top',[0,-1,0],[corner(-1,-1,-1),corner(1,-1,-1),corner(1,-1,1),corner(-1,-1,1)]),
-      face('bottom',[0,1,0],[corner(-1,1,-1),corner(1,1,-1),corner(1,1,1),corner(-1,1,1)]),
-      face('front',[0,0,-1],[corner(-1,-1,-1),corner(1,-1,-1),corner(1,1,-1),corner(-1,1,-1)]),
-      face('back',[0,0,1],[corner(-1,-1,1),corner(1,-1,1),corner(1,1,1),corner(-1,1,1)]),
-      face('left',[-1,0,0],[corner(-1,-1,-1),corner(-1,1,-1),corner(-1,1,1),corner(-1,-1,1)]),
-      face('right',[1,0,0],[corner(1,-1,-1),corner(1,1,-1),corner(1,1,1),corner(1,-1,1)])
+      faceOf('front',[0,0,-1],ring.map(p=>[p.x,p.y,part.z-half])),
+      faceOf('back',[0,0,1],ring.map(p=>[p.x,p.y,part.z+half]))
     ];
-    // 光照方向（世界系）：左上前方；旋转到观察系与可见性共用同一套旋转
-    const light={x:-0.45,y:-0.72,z:-0.53};
-    const rotate=v=>{
-      const nx=v.x*ca-v.z*sa,nz1=v.x*sa+v.z*ca;
-      return {x:nx,y:v.y*ce-nz1*se,z:v.y*se+nz1*ce};
-    };
-    const lit=rotate(light);
+    for(let i=0;i<ring.length;i++){
+      const a=ring[i],b=ring[(i+1)%ring.length];
+      const dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy)||1;
+      faces.push(faceOf('wall-'+i,[dy/len,-dx/len,0],
+        [[a.x,a.y,part.z-half],[b.x,b.y,part.z-half],[b.x,b.y,part.z+half],[a.x,a.y,part.z+half]]));
+    }
     return faces
-      .filter(f=>f.normal.z<0) // 法线朝向相机（观察系 z 分量为负）才可见
-      .map(f=>{
-        const shade=Math.min(1,Math.max(0.3,0.45+0.55*Math.max(0,f.normal.x*lit.x+f.normal.y*lit.y+f.normal.z*lit.z)));
-        return {id:f.id,points:f.points,shade};
+      .filter(face=>face.normal.z<0) // 法线朝向相机（观察系 z 分量为负）才可见
+      .map(face=>{
+        const shade=Math.min(1,Math.max(0.3,
+          0.45+0.55*Math.max(0,face.normal.x*light.x+face.normal.y*light.y+face.normal.z*light.z)));
+        return {id:face.id,points:face.points,shade};
       })
       .sort((a,b)=>b.depth-a.depth);
   }
@@ -249,6 +268,6 @@
   }
 
   return {labels,shapeNames,caption,polygon,createPart,tracePart,updatePart,removePart,variants,diff,editRegion,snapshot,moveNode,
-    needsNormalize,normalizeParts,sideRect,topRect,depthSpan,blockFaces,blockDepth,defaultDepth};
+    needsNormalize,normalizeParts,outlineBounds,sideRect,topRect,depthSpan,blockFaces,blockDepth,defaultDepth};
 });
 

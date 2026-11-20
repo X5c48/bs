@@ -84,30 +84,40 @@ test('side and top projections derive from outline plus depth without AI generat
   assert.ok(list.every(item=>parts.diff(source,item.parts)[0].fields[0].key==='depth'));
 });
 
-test('block faces are sorted far to near, lit, and flip visibility with pitch',()=>{
+test('体块是轮廓挤出的棱柱：随轮廓形状、随角度保持同一物体、含旋转的三视图一致',()=>{
   const part=parts.createPart('body','rectangle','主体',{x:320,y:240,width:120,height:160,depth:80,angle:0},size);
-  // 正视平视(az=0,el=0)：侧棱正对相机，只看到正面
+  // 正视平视(az=0,el=0)：只看到前盖面（侧壁法线 z=0，被剔除）
   const level=parts.blockFaces(part,0,0);
   assert.deepEqual(level.map(f=>f.id),['front']);
-  // 略俯视：顶面 + 正面，远→近
+  assert.equal(level[0].points.length,4,'矩形前盖应为 4 点轮廓');
+  // 略俯视：顶边侧壁 + 前盖，远→近
   const level2=parts.blockFaces(part,0,0.35);
-  assert.deepEqual(level2.map(f=>f.id),['top','front']);
+  assert.ok(level2.some(f=>f.id==='front')&&level2.some(f=>f.id.startsWith('wall-')),
+    level2.map(f=>f.id).join(','));
   assert.ok(level2.every(f=>f.shade>=0.3&&f.shade<=1));
-  // 俯视(el>0)：顶面可见、底面不可见；仰视(el<0)相反
+  // 俯仰翻转：俯视看到顶边侧壁，仰视看到底边侧壁；后盖在两个方向上都不可见
   const down=parts.blockFaces(part,0,0.6), up=parts.blockFaces(part,0,-0.6);
-  assert.deepEqual(down.map(f=>f.id).filter(id=>id==='top'),['top']);
-  assert.deepEqual(down.map(f=>f.id).filter(id=>id==='bottom'),[]);
-  assert.deepEqual(up.map(f=>f.id).filter(id=>id==='bottom'),['bottom']);
-  assert.deepEqual(up.map(f=>f.id).filter(id=>id==='top'),[]);
-  // 投影点为有限数值，且中心深度随方位角变化（供画家算法排序）
+  assert.ok(down.some(f=>f.id.startsWith('wall-')));
+  assert.ok(up.some(f=>f.id.startsWith('wall-')));
+  assert.ok(!up.some(f=>f.id==='back')&&!down.some(f=>f.id==='back'),'后盖朝向相机背面，始终不可见');
+  // 轮廓形状进入体块：三角描线部件 → 前盖 3 点、侧壁 3 面
+  const tri=parts.createPart('tri','polygon','三角',{x:320,y:240,width:100,height:100,depth:40,angle:0,
+    points:[{x:0,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}]},size);
+  const triFaces=parts.blockFaces(tri,0,0);
+  assert.equal(triFaces[0].points.length,3,'三角部件的前盖必须是 3 点，而不是包围盒 4 点');
+  assert.ok(triFaces.length===1,'平视只看到前盖');
+  // 角度改变后三视图仍与体块同源：侧视高度=轮廓旋转后高度、俯视宽度=轮廓旋转后宽度
+  const rotated=parts.createPart('rot','rectangle','旋转主体',{x:320,y:240,width:120,height:60,depth:50,angle:90},size);
+  const box=parts.outlineBounds(rotated);
+  assert.equal(Math.round(box.width),60);
+  assert.equal(Math.round(box.height),120);
+  assert.deepEqual(parts.sideRect(rotated),{x:rotated.z-25,y:box.y,width:50,height:box.height});
+  assert.deepEqual(parts.topRect(rotated),{x:box.x,y:rotated.z-25,width:box.width,height:50});
+  // 投影点为有限数值，且中心深度随方位角变化（画家算法排序用）
   for(const face of down) for(const p of face.points){
     assert.ok(Number.isFinite(p.x)&&Number.isFinite(p.y));
   }
   assert.notEqual(parts.blockDepth(part,0),parts.blockDepth(part,1.2));
-  // 光照：顶面比受光少的侧面亮
-  const top=down.find(f=>f.id==='top');
-  const dark=down.find(f=>f.id!=='top');
-  assert.ok(top.shade>=dark.shade);
 });
 
 

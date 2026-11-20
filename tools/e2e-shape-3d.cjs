@@ -155,6 +155,8 @@ async function main() {
       tri.labels[0] === '正视 1024×768' && tri.labels[1] === '侧视 厚 ' + spanNow
       && tri.labels[2] === '俯视 1024×' + spanNow, tri.labels.join(' | '));
     check('两条对齐分隔线', tri.seps === 2, String(tri.seps));
+    const alignLines = await page.locator('#shapeCanvas line.view-align').count();
+    check('视图对齐参考线（正视高度↔侧视、正视宽度↔俯视）', alignLines === 4, String(alignLines));
     check('侧视/俯视矩形 (4)', tri.rects === 6, String(tri.rects)); // 每部件侧+俯 2 个 × 3 部件
     check('画布比例随三视图扩展', tri.ratio !== '1024/768', tri.ratio);
 

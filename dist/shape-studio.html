@@ -103,7 +103,13 @@
         </section>
         <section class="shape-controls" aria-labelledby="liveTitle">
           <h2 id="liveTitle">实时辅助（锁定感知）</h2>
-          <p class="shape-muted" id="liveHint">开启后，拖动节点或修改参数会只重渲选中的部件，锁定的部件保持原样。</p>
+          <p class="shape-muted" id="liveHint">结构渲染：按当前所有部件轮廓出产品效果图，锁定部件轮廓不变。局部重绘：只重画选中部件，适合已有渲染底图。</p>
+          <label for="liveMode" class="shape-muted">模式
+            <select id="liveMode">
+              <option value="render">结构渲染 · 跟随轮廓出效果图</option>
+              <option value="region">局部重绘 · 只改选中部件</option>
+            </select>
+          </label>
           <div class="shape-tools">
             <button type="button" id="liveToggle" aria-pressed="false">开启实时辅助</button>
             <button type="button" id="liveRetry" hidden>重试</button>

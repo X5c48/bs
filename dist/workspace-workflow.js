@@ -394,6 +394,10 @@
       : Array.isArray(options.references)?options.references.slice(0,3):[];
     const refsSeen=new Set();
     for(const reference of refs) {
+      const ortho=['ortho-front','ortho-left','ortho-top'].includes(reference.role);
+      if(ortho&&kind==='render'&&doc.jobs[reference.outputJobId]?.outputs.some(o=>o.id===reference.id&&o.view===reference.role.slice(6)&&o.blobId)&&!refsSeen.has(reference.id)){
+        refsSeen.add(reference.id);continue;
+      }
       if(!doc.assets[reference.id]||reference.id===sourceId||refsSeen.has(reference.id)||!validRoles.includes(reference.role)) {
         throw new Error('参考图连接无效。请为每张参考图指定用途。');
       }
@@ -431,9 +435,13 @@
       if(kind==='view') throw new Error('请选择视角，或描述想要的角度。');
       throw new Error(kind==='form'?'请选择造型方向，或补充想要的变化。':kind==='color'?'请添加目标色、配色参考或文字说明。':'请描述你想改的内容。');
     }
+    const ortho=prior ? prior.ortho : options.orthographic && kind==='view' && asset.draft?.parts?.length
+      ? window.WuyingWorkspaceRender.orthoSnapshot(asset) : null;
+    if(ortho && (!views.length||views.some(view=>!['front','left','top'].includes(view))))
+      throw new Error('标准投影仅支持正视、左视和俯视。');
     const defaults=modelPrefs();
     const chosen=options.provider||priorSettings.provider||defaults.provider;
-    const provider=!partSource&&!imageTool&&!expanding&&(chosen==='runninghub'||chosen==='imageapi')?chosen:'comfy';
+    const provider=ortho?'projection':!partSource&&!imageTool&&!expanding&&(chosen==='runninghub'||chosen==='imageapi')?chosen:'comfy';
     const apiProfile=provider==='imageapi'
       ? await window.WuyingPlatformApi.getProfile(options.apiProfileId||priorSettings.apiProfileId||defaults.apiProfileId,{signal})
       : null;
@@ -499,9 +507,12 @@
           sketch:await window.WuyingWorkspaceComposite.toPng(only(layer=>layer.kind==='ink'),store)
         };
       }
-      references=await Promise.all(refs.map(async({id,role})=>({
-        id,role,blobId:uid(),blob:await window.WuyingWorkspaceComposite.toPng(doc.assets[id],store)
-      })));
+      references=await Promise.all(refs.map(async({id,role,outputJobId})=>{
+        const ref=role.startsWith('ortho-')?doc.jobs[outputJobId].outputs.find(o=>o.id===id):null;
+        const blob=ref?await store.getBlob(ref.blobId):await window.WuyingWorkspaceComposite.toPng(doc.assets[id],store);
+        if(!blob) throw new Error('缺少参考图像文件。');
+        return {id,role,blobId:uid(),blob};
+      }));
     }
     if(instant){
       const bitmap=await createImageBitmap(source);
@@ -520,6 +531,7 @@
       settings:{...connectionSettings,
         strength,quantity,seed,aspect,customW,customH,mode,resolution,style,width:size.width,height:size.height,
         ...(influenceKind?{influence}:{})}};
+    if(ortho){job.ortho=ortho;job.settings.provider='projection';}
     if(outpaint)job.settings.outpaint=outpaint;
     if(partSource) Object.assign(job,{partSource,protectedAreas});
     if(scene) job.scene=sceneIds;
@@ -528,6 +540,8 @@
     if(form) Object.assign(job.settings,{form,renderPrompt});
     if(palette.length) Object.assign(job.settings,{palette,renderPrompt});
     if(views.length) Object.assign(job.settings,{views,viewPrompts});
+    // 角度球精确角度（单视角时）：存进 settings 供重跑时复用
+    if(views.length&&options.viewAngles) job.settings.viewAngles=options.viewAngles;
     if(directions.length) Object.assign(job.settings,{directions,directionPrompts,renderPrompt});
     if(studio) Object.assign(job.settings,{shots,material,shotPrompts,shotSizes});
     const transparent=kind==='cutout'||(kind==='upscale'&&(prior?priorSettings.transparent:window.WuyingWorkspaceComposite.isTransparent?.(asset)));
@@ -548,11 +562,20 @@
         onStatus('生成 '+progress+'…',{jobId:id,count:i});
         const slot='workspace-'+id+'-'+i;
         const onProgress=message=>onStatus(progress+' · '+message,{jobId:id,count:i});
-        const blob=imageTool
+        // 生成视角（本机）：有部件数据时先按该视角的方位/俯仰把造型投影成结构线稿，
+        // 作为 ControlNet 条件图——输出几何严格来自现有造型数据，不允许自由发挥
+        let structureImage;
+        if(!ortho&&kind==='view'&&view&&asset.draft?.parts?.length){
+          const angle=window.WuyingWorkspaceRender.resolveViewAngle(view,(prior?priorSettings.viewAngles:options.viewAngles)?.[view]);
+          structureImage=await window.WuyingWorkspaceRender.structureSketchBlob(asset.draft.parts,size.width,size.height,angle.azimuth,angle.elevation);
+          if(structureImage) onProgress('已按部件结构生成 '+viewPresets[view].label+'投影线稿');
+        }
+        const blob=ortho?await window.WuyingWorkspaceRender.orthographicDrawing(ortho,view,size):imageTool
           ? (await window.WuyingComfy.runImageTool({kind,endpoint,sourceImage:source,size,slot,signal,onStatus:onProgress})).blob
           : await window.WuyingWorkspaceRender.generate({
           kind:kind==='explore'?'render':kind,source,selection,protectedAreas,outpaint,prompt:view?viewPrompts[view]:heading?directionPrompts[heading]:shot?shotPrompts[shot]:renderPrompt,references,provider,cloudModel,apiProfile,endpoint,checkpoint,controlnet,strength,
           ...(influenceKind?{influence}:{}),...(scene?{scene:sceneImages}:{}),...(shot?{shot}:{}),
+          ...(structureImage?{structureImage}:{}),
           size:shot?shotSizes[shot]:size,mode,resolution:cloudResolution(size,resolution),
           seed:(seed+i)>>>0,slot,signal,onStatus:onProgress
         });

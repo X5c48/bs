@@ -142,15 +142,70 @@
 
   // latentWidth/latentHeight：实时档分辨率，须为 modelWidth/modelHeight 的等比缩放且 8 对齐，
   // 这样 cropResult 仍按同一坐标系裁切，比例不会变形。tier 决定步数与画质。
-  function liveWorkflow({input,quality,checkpoint,controlnet,strength,prompt,negative='',inputImage,colorGuide,seed,latentWidth=640,latentHeight=512,tier='balanced',endPercent}) {
+  // SD1.5 / SDXL 的 CLIP 一次只吃 77 token，超长提示词的后半段会被静默丢弃。
+  // 表现就是：写了「马克笔灰模、白底无场景」，出图却是照片级白模——风格词根本没进模型。
+  // 按逗号语义切成若干块分别编码，再用 ConditioningCombine 拼起来。
+  function splitPrompt(text, maxWords = 55) {
+    const clean = String(text || '').trim();
+    if (!clean) return [''];
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length <= maxWords) return [clean];
+    const pieces = clean.split(/\s*,\s*/).filter(Boolean);
+    if (pieces.length < 2) {
+      const chunks = [];
+      for (let i = 0; i < words.length; i += maxWords) chunks.push(words.slice(i, i + maxWords).join(' '));
+      return chunks;
+    }
+    const chunks = [];
+    let current = [], count = 0;
+    for (const piece of pieces) {
+      const size = piece.split(/\s+/).filter(Boolean).length;
+      if (count && count + size > maxWords) {
+        chunks.push(current.join(', '));
+        current = [piece];
+        count = size;
+      } else {
+        current.push(piece);
+        count += size;
+      }
+    }
+    if (current.length) chunks.push(current.join(', '));
+    return chunks;
+  }
+
+  // 长提示词分块编码：CLIP 一次只吃 77 token，超出的部分会被静默丢弃。
+  // 单块时仍落在传入的 firstId 上，短提示词的图结构完全不变。
+  function encodeText(graph, node, text, firstId, extraBase, combineBase) {
+    const chunks = splitPrompt(text);
+    if (chunks.length <= 1) {
+      graph[firstId] = node('CLIPTextEncode', { clip: ['1', 1], text: chunks[0] || '' });
+      return [String(firstId), 0];
+    }
+    let previous = null;
+    chunks.forEach((chunk, index) => {
+      const id = index === 0 ? firstId : extraBase + (index - 1);
+      graph[id] = node('CLIPTextEncode', { clip: ['1', 1], text: chunk });
+      if (!previous) { previous = [String(id), 0]; return; }
+      const combineId = String(combineBase + index - 1);
+      graph[combineId] = node('ConditioningCombine', { conditioning_1: previous, conditioning_2: [String(id), 0] });
+      previous = [combineId, 0];
+    });
+    return previous;
+  }
+
+  function liveWorkflow({input,quality,checkpoint,controlnet,strength,prompt,negative='',inputImage,colorGuide,seed,latentWidth=640,latentHeight=512,tier='balanced',endPercent,controlStrength,denoiseOverride,sketchPreview}) {
     const node=(class_type,inputs)=>({class_type,inputs});
     const graph={
-      1:node('CheckpointLoaderSimple',{ckpt_name:checkpoint}),
-      2:node('CLIPTextEncode',{clip:['1',1],text:prompt}),
-      3:node('CLIPTextEncode',{clip:['1',1],text:negative})
+      1:node('CheckpointLoaderSimple',{ckpt_name:checkpoint})
     };
+    const encode = (text, firstId, extraBase, combineBase) => encodeText(graph, node, text, firstId, extraBase, combineBase);
+    let positive = encode(prompt, 2, 40, 70);
+    let negativeInput = encode(negative, 3, 50, 80);
+    // 探索幅度档位会单独给条件强度与重画力度：条件强度和 img2img 力度是两个旋钮，
+    // 贴线档需要「条件锁死 + 重画很浅」，只用 strength 反推达不到这个组合。
+    const conditionStrength=Number.isFinite(controlStrength)?Math.min(1.5,Math.max(0,controlStrength)):strength;
     const lineControl=input==='sketch'&&!!controlnet;
-    let positive=['2',0],negativeInput=['3',0],denoise=1;
+    let denoise=1;
     if(input!=='text')graph[4]=node('LoadImage',{image:inputImage});
     if(lineControl){
       if(/canny/i.test(controlnet)){
@@ -161,28 +216,33 @@
       graph[6]=node('ControlNetLoader',{control_net_name:controlnet});
       graph[7]=node('ControlNetApplyAdvanced',{
         positive,negative:negativeInput,control_net:['6',0],image:[graph[5]?'5':'4',0],
-        strength,start_percent:0,end_percent:endPercent??1,vae:['1',2]
+        strength:conditionStrength,start_percent:0,end_percent:endPercent??1,vae:['1',2]
       });
       positive=['7',0];negativeInput=['7',1];
     }
-    if(input==='text'||(lineControl&&!colorGuide)){
+    // 造型探索档位需要以草图本身作 latent 起点，denoise 才有意义。
+    // 平时「sketch + ControlNet」走空 latent 全重画（靠条件图控形），贴线档要保留线条就不能这么做。
+    const seedFromSketch=lineControl&&!colorGuide&&Number.isFinite(denoiseOverride);
+    if(input==='text'||(lineControl&&!colorGuide&&!seedFromSketch)){
       graph[8]=node('EmptyLatentImage',{width:latentWidth,height:latentHeight,batch_size:1});
     }else{
       const scaleId=lineControl?'15':'5';
-      if(lineControl)graph[14]=node('LoadImage',{image:colorGuide});
+      if(lineControl)graph[14]=node('LoadImage',{image:colorGuide||inputImage});
       graph[scaleId]=node('ImageScale',{
         image:[lineControl?'14':'4',0],width:latentWidth,height:latentHeight,upscale_method:'bilinear',crop:'disabled'
       });
       graph[8]=node('VAEEncode',{pixels:[scaleId,0],vae:['1',2]});
       // Higher shape strength retains more of the incoming form in img2img.
       denoise=input==='sketch'?(lineControl?.85-strength*.14:.80-strength*.23):.62-strength*.30;
+      // 档位显式给的力度优先：贴线档要低到 .4 左右，公式下限是 .58，达不到。
+      if(Number.isFinite(denoiseOverride))denoise=Math.min(.95,Math.max(.15,denoiseOverride));
     }
     const turbo=/(?:^|[._ -])turbo(?:[._ -]|$)/i.test(checkpoint);
     const lcm=/(?:^|[._ -])lcm(?:[._ -]|$)/i.test(checkpoint);
     const cyberRealistic=/cyberrealistic/i.test(checkpoint)&&!turbo&&!lcm;
     // live 三档：speed 抢时间、balanced 默认、quality 堆细节。SD1.5 在 live 下同样用 dpmpp_2m + karras。
     const liveSteps=turbo?(tier==='quality'?6:4):lcm?(tier==='quality'?8:tier==='speed'?4:5)
-      :cyberRealistic?(tier==='speed'?8:tier==='quality'?20:12)
+      :cyberRealistic?(tier==='speed'?8:tier==='quality'?20:sketchPreview?11:12)
       :(tier==='speed'?6:tier==='quality'?16:10);
     const liveSample=quality==='live';
     const sample={model:['1',0],positive,negative:negativeInput,seed,
@@ -260,21 +320,61 @@
     }
   }
 
+  // A separate client ID isolates preview traffic from other ComfyUI jobs.
+  function openSamplingPreview(base, onPreview, signal) {
+    if(!onPreview || typeof WebSocket==='undefined') return null;
+    const url=new URL(base+'/ws');
+    if(!['localhost','127.0.0.1','[::1]'].includes(url.hostname)) return null;
+    url.protocol=url.protocol==='https:'?'wss:':'ws:';
+    const clientId=crypto.randomUUID();
+    url.searchParams.set('clientId',clientId);
+    let socket;
+    try{socket=new WebSocket(url);}catch{return null;}
+    socket.binaryType='arraybuffer';
+    let ready=false, sent=false;
+    socket.addEventListener('message',event=>{
+      const bytes=event.data;
+      if(sent || signal.aborted || !(bytes instanceof ArrayBuffer) || bytes.byteLength<=8) return;
+      const header=new DataView(bytes),type=header.getUint32(0);
+      let offset=8,mime;
+      if(type===1) mime=header.getUint32(4)===2?'image/png':'image/jpeg';
+      else if(type===4){
+        offset+=header.getUint32(4);
+        if(offset>=bytes.byteLength) return;
+        try{mime=JSON.parse(new TextDecoder().decode(bytes.slice(8,offset))).image_type;}catch{return;}
+      }
+      if(!['image/jpeg','image/png'].includes(mime)) return;
+      sent=true;
+      onPreview(new Blob([bytes.slice(offset)],{type:mime}));
+    });
+    const opened=new Promise(resolve=>{
+      socket.addEventListener('open',()=>{ready=true;resolve();},{once:true});
+      socket.addEventListener('error',resolve,{once:true});
+      socket.addEventListener('close',resolve,{once:true});
+    });
+    return {clientId,async ready(){await Promise.race([opened,delay(signal,100)]);return ready&&socket.readyState===1;},
+      close(){socket.close();}};
+  }
+
   async function runWorkflow({
-    endpoint,inputBlob,guideBlob,maskBlob,signal,onStatus,build,slot,cancelPending=false,pollInterval=POLL_INTERVAL_MS
+    endpoint,inputBlob,guideBlob,maskBlob,signal,onStatus,build,slot,cancelPending=false,pollInterval=POLL_INTERVAL_MS,onPreview,previewMethod='latent2rgb'
   }){
     signal?.throwIfAborted();
     const base=endpointBase(endpoint),deadline=AbortSignal.timeout(GENERATION_TIMEOUT_MS);
     const generationSignal=signal?AbortSignal.any([signal,deadline]):deadline;
     const liveSlot=typeof slot==='string'&&/^[a-z0-9-]{1,100}$/i.test(slot);
     let promptId;
+    const sampling=openSamplingPreview(base,onPreview,generationSignal);
     async function uploadImage(blob,label){
+      // 实时帧（liveSlot）用固定文件名 + overwrite：每帧一个随机名会让 temp 无限增长，
+      // 攒到一定数量会触发 ComfyUI 的批量删除确认闸门并直接退出（历史上出现过整机渲染全挂）。
       const random=crypto.getRandomValues(new Uint32Array(2));
-      const name='wuying-'+(liveSlot?slot+'-':'')+label+'-'+random[0]+'-'+random[1]+'.png';
+      const name=liveSlot?'wuying-'+slot+'-'+label+'.png'
+        :'wuying-'+label+'-'+random[0]+'-'+random[1]+'.png';
       const upload=new FormData();
       upload.set('image',blob,name);
       upload.set('type',liveSlot?'temp':'input');
-      upload.set('overwrite','false');
+      upload.set('overwrite',liveSlot?'true':'false');
       if(liveSlot)upload.set('subfolder','wuying-live');
       const uploaded=await request(base,'/upload/image',generationSignal,{method:'POST',body:upload});
       if(typeof uploaded?.name!=='string'||!uploaded.name)throw new Error('ComfyUI 未返回上传后的文件名。');
@@ -298,8 +398,10 @@
       onStatus?.('正在提交生成任务…');
       generationSignal.throwIfAborted();
       // Let an already submitted live request return its ID so Stop can cancel it.
+      const preview=await sampling?.ready();
       const queued=await request(base,'/prompt',cancelPending?null:generationSignal,{
-        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:build(inputImage,colorGuide,maskImage)})
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:build(inputImage,colorGuide,maskImage),
+          ...(preview?{client_id:sampling.clientId,extra_data:{preview_method:previewMethod}}:{})})
       });
       promptId=queued?.prompt_id;
       if(typeof promptId!=='string'||!promptId)throw new Error('ComfyUI 未返回任务编号。'+serverError(queued));
@@ -325,7 +427,7 @@
       signal?.throwIfAborted();
       if(deadline.aborted)throw new Error('ComfyUI 生成等待超过 5 分钟，请在后端查看队列。');
       throw error;
-    }
+    }finally{sampling?.close();}
   }
 
   async function generate({endpoint,checkpoint,controlnet,strength,prompt,negative='',sketch,signal,onStatus,endPercent}){
@@ -345,6 +447,11 @@
     const {endpoint,input,quality,checkpoint,controlnet,prompt,sourceImage,colorGuideImage,slot,signal,onStatus}=options;
     if(!['sketch','image','text'].includes(input)||!['live','preview','final'].includes(quality))throw new Error('无法识别当前渲染模式。');
     if(typeof checkpoint!=='string'||!checkpoint.trim())throw new Error('请先选择一个支持 SD 1.5 或 SDXL 的基础模型。');
+    // Qwen 是分体式 diffusion（没有 CLIP/VAE 打包），CheckpointLoaderSimple 必然 400。
+    // 这里提前拦住并给出可执行提示，避免用户看到一长串 ckpt_name 报错。
+    if(/^qwen[_ ]?image/i.test(checkpoint.trim())){
+      throw new Error('Qwen-Image-2.1 不能走 SD 实时通道，请用 Qwen 高质量预览（或换回 SD1.5 模型）。');
+    }
     if(typeof prompt!=='string'||!prompt.trim())throw new Error('请先输入画面描述。');
     if(input!=='text'&&(!(sourceImage instanceof Blob)||!sourceImage.size||sourceImage.type!=='image/png')){
       throw new Error('画面输入需要有效的 PNG 数据。');
@@ -355,7 +462,8 @@
     const strength=Math.min(1.5,Math.max(0,Number(options.strength)||0));
     const seed=Number.isInteger(options.seed)&&options.seed>=0?options.seed:crypto.getRandomValues(new Uint32Array(1))[0];
     return runWorkflow({endpoint,inputBlob:input==='text'?null:sourceImage,guideBlob:colorGuideImage,slot,signal,onStatus,
-      cancelPending:true,pollInterval:quality==='live'?200:600,
+      cancelPending:true,pollInterval:quality==='live'?200:600,onPreview:quality==='live'?options.onPreview:undefined,
+      previewMethod:options.sketchPreview&&options.tier==='quality'?'taesd':'latent2rgb',
       build:(inputImage,colorGuide)=>liveWorkflow({...options,inputImage,colorGuide,strength,seed})});
   }
 
@@ -368,28 +476,42 @@
   }
 
   // Qwen-Image-2.1（分体式 diffusion + Qwen3VL 编码器 + VAE，Turbo 8 级 sigma，CFG 1）。
-  // 源图走 TextEncodeQwenImage21 的参考图槽，由 DiT 拼接画面内容；latent 取编码器输出，
-  // 输出尺寸自动跟随参考图长宽比（以 resolution 为基准做 32 对齐）。
-  function qwenWorkflow({ checkpoint, clip = 'qwen3vl_8b_int8_convrot.safetensors', vae = 'qwen_image_2.1_vae_bf16.safetensors', prompt, negative = '', reference, seed = 0, resolution = 1024 }) {
+  // 参考图接线（关键）：TextEncodeQwenImage21 的 images 是 Autogrow 动态输入，API 里必须用
+  // 扁平键 `images.image_1` 下发，写成 {images:{image_1:[...]}} 会被静默忽略（模型退化成纯文生图）；
+  // 同时必须接 vae，否则只做视觉塔编码、不拼参考 latent，造型依然锁不住。
+  const QWEN_SIGMAS = '1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0';
+  // 8 步是 Turbo 的默认档；步数更多时按原曲线分段线性插值，保持同样的下降形状（不改变最后一步归零）。
+  function qwenSigmas(steps) {
+    const base = QWEN_SIGMAS.split(',').map(Number);
+    if (!Number.isInteger(steps) || steps < 4 || steps === 8) return QWEN_SIGMAS;
+    const out = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * (base.length - 1);
+      const low = Math.floor(t), high = Math.min(base.length - 1, low + 1);
+      out.push(base[low] + (base[high] - base[low]) * (t - low));
+    }
+    out[out.length - 1] = 0;
+    return out.map(value => Math.round(value * 1e6) / 1e6).join(', ');
+  }
+  function qwenWorkflow({ checkpoint, clip = 'qwen3vl_8b_int8_convrot.safetensors', vae = 'qwen_image_2.1_vae_bf16.safetensors', prompt, negative = '', reference, seed = 0, resolution = 1024, steps = 8 }) {
     const node = (class_type, inputs) => ({ class_type, inputs });
     const graph = {
       '1': node('UNETLoader', { unet_name: checkpoint, weight_dtype: 'default' }),
       '2': node('QwenImage21Cache', { model: ['1', 0], device: 'auto', dtype: 'default' }),
       '3': node('CLIPLoader', { clip_name: clip, type: 'qwen_image', device: 'default' }),
       '4': node('VAELoader', { vae_name: vae }),
-      '5': node('TextEncodeQwenImage21', { clip: ['3', 0], prompt, negative_prompt: negative, resolution }),
+      '5': node('TextEncodeQwenImage21', { clip: ['3', 0], vae: ['4', 0], prompt, negative_prompt: negative, resolution }),
       '6': node('KSamplerSelect', { sampler_name: 'euler' }),
       '7': node('RandomNoise', { noise_seed: seed, noise_mode: 'fixed' }),
       '8': node('CFGGuider', { model: ['2', 0], cfg: 1, positive: ['5', 0], negative: ['5', 1] }),
-      '9': node('ManualSigmas', { sigmas: '1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0' }),
+      '9': node('ManualSigmas', { sigmas: qwenSigmas(steps) }),
       '10': node('SamplerCustomAdvanced', { noise: ['7', 0], guider: ['8', 0], sampler: ['6', 0], sigmas: ['9', 0], latent_image: ['5', 2] }),
       '12': node('VAEDecode', { samples: ['10', 0], vae: ['4', 0] }),
       '11': node('SaveImage', { images: ['12', 0], filename_prefix: 'Wuying/qwen21' })
     };
     if (reference) {
       graph['14'] = node('LoadImage', { image: reference });
-      // images 是 autogrow 字典输入：{image_1: [节点, 槽位]}。
-      graph['5'].inputs.images = { image_1: ['14', 0] };
+      graph['5'].inputs['images.image_1'] = ['14', 0];
     }
     return graph;
   }
@@ -408,36 +530,40 @@
       ? options.resolution : 1024;
     const seed = Number.isInteger(options.seed) && options.seed >= 0
       ? options.seed : crypto.getRandomValues(new Uint32Array(1))[0];
+    // 质量档加步是唯一还能挖的画质余量（Turbo 默认 8 步）；实时帧固定 8 步保响应。
+    const steps = Number.isInteger(options.steps) && options.steps >= 4 && options.steps <= 24 ? options.steps : 8;
     return runWorkflow({
       endpoint, inputBlob: sourceImage || null, slot, signal, onStatus, pollInterval: 600,
       // 实时通道（Qwen 慢速预览）需要取消挂起任务；默认保持旧行为。
       cancelPending: options.cancelPending === true,
-      build: reference => qwenWorkflow({ checkpoint: checkpoint.trim(), prompt, negative, reference, seed, resolution })
+      build: reference => qwenWorkflow({ checkpoint: checkpoint.trim(), prompt, negative, reference, seed, resolution, steps })
     });
   }
 
   // guide + controlnet：情境渲染时用草图约束选区内的造型（Scribble 需黑底白线，故反相）。
-  function regionWorkflow({ checkpoint, prompt, denoise, seed, image, mask, guide, controlnet, controlStrength = .9 }) {
+  function regionWorkflow({ checkpoint, prompt, negative, denoise, seed, image, mask, guide, controlnet, liveTier, controlStrength = .9 }) {
     const node = (class_type, inputs) => ({ class_type, inputs });
     const turbo = /(?:^|[._ -])turbo(?:[._ -]|$)/i.test(checkpoint);
     const lcm = /(?:^|[._ -])lcm(?:[._ -]|$)/i.test(checkpoint);
     const graph = {
-      1: node('CheckpointLoaderSimple', { ckpt_name: checkpoint }),
-      2: node('CLIPTextEncode', { clip: ['1', 1], text: prompt }),
-      3: node('CLIPTextEncode', { clip: ['1', 1], text: 'blurry, low quality, distorted edges, extra objects, text, watermark' }),
-      4: node('LoadImage', { image }),
-      5: node('LoadImage', { image: mask }),
-      6: node('ImageToMask', { image: ['5', 0], channel: 'red' }),
-      7: node('VAEEncode', { pixels: ['4', 0], vae: ['1', 2] }),
-      8: node('SetLatentNoiseMask', { samples: ['7', 0], mask: ['6', 0] }),
-      9: node('KSampler', {
-        model: ['1', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['8', 0], seed, denoise,
-        steps: turbo ? 9 : lcm ? 10 : 26, cfg: turbo ? 1 : lcm ? 1.8 : 6.5,
-        sampler_name: lcm ? 'lcm' : 'dpmpp_2m', scheduler: turbo ? 'sgm_uniform' : 'karras'
-      }),
-      10: node('VAEDecode', { samples: ['9', 0], vae: ['1', 2] }),
-      [SAVE_NODE_ID]: node('PreviewImage', { images: ['10', 0] })
+      1: node('CheckpointLoaderSimple', { ckpt_name: checkpoint })
     };
+    // 场景板的提示词比改图长得多，同样要分块编码，否则环境描述会被 77 token 截掉。
+    const encode = (text, firstId, extraBase, combineBase) => encodeText(graph, node, text, firstId, extraBase, combineBase);
+    const positive = encode(prompt, 2, 40, 70);
+    const negativeInput = encode(negative || 'blurry, low quality, distorted edges, extra objects, text, watermark', 3, 50, 80);
+    graph[4] = node('LoadImage', { image });
+    graph[5] = node('LoadImage', { image: mask });
+    graph[6] = node('ImageToMask', { image: ['5', 0], channel: 'red' });
+    graph[7] = node('VAEEncode', { pixels: ['4', 0], vae: ['1', 2] });
+    graph[8] = node('SetLatentNoiseMask', { samples: ['7', 0], mask: ['6', 0] });
+    graph[9] = node('KSampler', {
+      model: ['1', 0], positive, negative: negativeInput, latent_image: ['8', 0], seed, denoise,
+      steps: liveTier ? (turbo||lcm?5:liveTier==='speed'?6:12) : turbo ? 9 : lcm ? 10 : 26, cfg: turbo ? 1 : lcm ? 1.8 : 6.5,
+      sampler_name: lcm ? 'lcm' : 'dpmpp_2m', scheduler: turbo ? 'sgm_uniform' : 'karras'
+    });
+    graph[10] = node('VAEDecode', { samples: ['9', 0], vae: ['1', 2] });
+    graph[SAVE_NODE_ID] = node('PreviewImage', { images: ['10', 0] });
     if (guide && controlnet) {
       graph[21] = node('LoadImage', { image: guide });
       const lineart = /line[ _-]?art|misto[ _-]?line/i.test(controlnet), canny = /canny/i.test(controlnet);
@@ -445,7 +571,7 @@
       else if (!lineart) graph[22] = node('ImageInvert', { image: ['21', 0] });
       graph[23] = node('ControlNetLoader', { control_net_name: controlnet });
       graph[24] = node('ControlNetApplyAdvanced', {
-        positive: ['2', 0], negative: ['3', 0], control_net: ['23', 0], image: [graph[22] ? '22' : '21', 0],
+        positive, negative: negativeInput, control_net: ['23', 0], image: [graph[22] ? '22' : '21', 0],
         strength: controlStrength, start_percent: 0, end_percent: 1, vae: ['1', 2]
       });
       graph[9].inputs.positive = ['24', 0];
@@ -454,7 +580,7 @@
     return graph;
   }
 
-  async function renderRegion({ endpoint, checkpoint, prompt, denoise, sourceImage, maskImage, guideImage, controlnet, controlStrength, slot, signal, onStatus, seed }) {
+  async function renderRegion({ endpoint, checkpoint, prompt, negative, denoise, sourceImage, maskImage, guideImage, controlnet, controlStrength, liveTier, slot, signal, onStatus, seed }) {
     signal?.throwIfAborted();
     if (!checkpoint?.trim() || !prompt?.trim()) throw new Error('请选择基础模型，并说明选区里要改什么。');
     if (!Number.isFinite(denoise) || denoise < .25 || denoise > .95) throw new Error('选区改动强度须在 25% 到 95% 之间。');
@@ -465,8 +591,8 @@
     const control = guideImage && typeof controlnet === 'string' && controlnet.trim() ? controlnet.trim() : '';
     const samplingSeed = Number.isInteger(seed) && seed >= 0 ? seed : crypto.getRandomValues(new Uint32Array(1))[0];
     return runWorkflow({
-      endpoint, inputBlob: sourceImage, maskBlob: maskImage, guideBlob: control ? guideImage : null, slot, signal, onStatus, cancelPending: true, pollInterval: 600,
-      build: (image, guide, mask) => regionWorkflow({ checkpoint, prompt, denoise, seed: samplingSeed, image, mask, guide, controlnet: control, controlStrength })
+      endpoint, inputBlob: sourceImage, maskBlob: maskImage, guideBlob: control ? guideImage : null, slot, signal, onStatus, cancelPending: true, pollInterval: liveTier?200:600,
+      build: (image, guide, mask) => regionWorkflow({ checkpoint, prompt, negative, denoise, seed: samplingSeed, image, mask, guide, controlnet: control, controlStrength, liveTier })
     });
   }
 

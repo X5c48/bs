@@ -52,3 +52,27 @@ test('normalizeStage 兜底未知阶段为 sketch',()=>{
   assert.equal(stages.normalizeStage('bogus'),'sketch');
   assert.equal(stages.normalizeStage(undefined),'sketch');
 });
+
+/* ── 笔迹几何签名 + 新旧快照兼容 ── */
+
+test('layersSig 对笔迹几何敏感：原地改一笔也算改过',()=>{
+  const layer={id:'a',kind:'ink',visible:true,opacity:1,strokes:[{points:[{x:10,y:20},{x:30,y:40}],size:3}]};
+  const base=stages.layersSig([layer]);
+  assert.equal(stages.layersSig([layer]),base);                     // 同一笔迹
+  assert.notEqual(stages.layersSig([{...layer,strokes:[{points:[{x:10,y:20},{x:31,y:40}],size:3}]}]),base); // 移动一点
+  assert.notEqual(stages.layersSig([{...layer,strokes:[{points:[{x:10,y:20},{x:30,y:40}],size:5}]}]),base); // 改笔宽
+  assert.equal(stages.layersSig([{...layer,strokes:[{points:[{x:10.04,y:20.04},{x:30,y:40}],size:3}]}]),base); // 亚像素抖动取整后一致
+});
+
+test('sigMatches 兼容旧版快照（无笔迹几何），新快照全量比较',()=>{
+  const layer={id:'a',kind:'ink',visible:true,opacity:1,strokes:[{points:[{x:1,y:2},{x:3,y:4}]}]};
+  const legacySig=JSON.stringify([[layer.id,'ink',null,true,1,1]]);          // 旧 6 字段
+  const newSig=stages.layersSig([layer]);
+  assert.equal(stages.sigMatches([layer],legacySig),true);                    // 旧快照按旧口径
+  assert.equal(stages.sigMatches([{...layer,visible:false}],legacySig),false);
+  assert.equal(stages.sigMatches([{...layer,strokes:[]}],legacySig),false);   // 笔迹数变化旧口径也认
+  assert.equal(stages.sigMatches([layer],newSig),true);                       // 新快照全等
+  assert.equal(stages.sigMatches([{...layer,strokes:[{points:[{x:9,y:9}]}]}],newSig),false); // 新快照抓几何
+  assert.equal(stages.sigMatches([layer],null),false);
+  assert.equal(stages.sigMatches([layer],'not json'),false);
+});

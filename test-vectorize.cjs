@@ -73,3 +73,15 @@ test('detectParts：maxParts 截断与 minArea 过滤生效',()=>{
   const big=vectorize.detectParts(ctx.grid,W,H,{minArea:2000});
   assert.equal(big.length,1,'只剩面积最大的底座');
 });
+
+test('接触线与一像素断口仍生成两个独立的可编辑区域',()=>{
+  const ctx=blank();
+  for(const [left,right] of [[20,70],[70,120]]){
+    rect(ctx,left,40,right,40);rect(ctx,left,90,right,90);
+    rect(ctx,left,40,left,90);rect(ctx,right,40,right,90);
+  }
+  ctx.grid[40*W+45]=0;
+  const parts=vectorize.detectParts(ctx.grid,W,H);
+  assert.equal(parts.length,2);
+  assert.ok(parts.every(p=>p.bounds.width<50&&p.bounds.height<50));
+});

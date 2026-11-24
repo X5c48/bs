@@ -26,7 +26,7 @@
   <header class="shape-header">
     <a class="shape-button" id="shapeBack" href="files.html">← 工作台</a>
     <div class="shape-title"><span id="shapeProject"></span><h1 id="shapeTitle">部件推敲</h1></div>
-    <a class="shape-button" id="shapeImage" href="files.html" hidden>图像编辑室</a>
+    <a class="shape-button" id="file1Review" href="/workbench.html?project=552d4a26-87ad-4321-a6a0-fb992153ca0f" hidden>测试文档副本</a><a class="shape-button" id="shapeImage" href="files.html" hidden>图像编辑室</a>
   </header>
   <p id="shapeStatus" class="shape-status" role="status" aria-live="polite"></p>
   <nav class="flow-rail shape-rail" id="shapeFlowRail" aria-label="造型流程阶段" hidden>
@@ -34,9 +34,7 @@
     <span class="flow-arrow" aria-hidden="true">→</span>
     <span class="flow-step is-active" data-stage="refine"><b>精细微调</b><small>节点线条 · 锁定</small></span>
     <span class="flow-arrow" aria-hidden="true">→</span>
-    <a class="flow-step" id="railOrtho" href="#"><b>三视图</b><small>正视 · 侧视 · 俯视</small></a>
-    <span class="flow-arrow" aria-hidden="true">→</span>
-    <a class="flow-step" id="railRender" href="#"><b>产品渲染</b><small>角度球 · 快速出图</small></a>
+    <a class="flow-step" id="railRender" href="#"><b>产品渲染</b><small>三视图 · 自由视角</small></a>
   </nav>
   <main id="shapeShell" class="shape-shell" hidden>
     <aside class="shape-parts" aria-labelledby="partListTitle">
@@ -46,6 +44,7 @@
         <button type="button" id="addRectangle">矩形</button>
         <button type="button" id="addEllipse">椭圆</button>
       </div>
+      <button type="button" id="removePart" class="shape-danger">删除选中部件</button>
       <ul id="shapeParts"></ul>
     </aside>
     <section class="shape-workspace" aria-label="部件草稿画布">
@@ -54,56 +53,26 @@
         <label id="triToggleWrap" hidden><input id="triToggle" type="checkbox"> 三视图</label>
         <label id="referenceToggle" hidden><input id="showReference" type="checkbox" checked> 底图</label>
         <button type="button" id="loadExample" hidden>载入台灯示例</button>
-        <button type="button" id="vectorize" hidden title="把底图里闭合的线稿轮廓自动拆成部件">矢量化底图</button>
+        <button type="button" id="vectorize" hidden title="识别闭合轮廓并规整为可编辑的几何节点">矢量化并规整底图</button>
       </div>
+      <small>正视图：双击轮廓加点，选中节点后按 Delete 删除。拖橙色手柄调曲率，Alt 单独调整一侧。拖任一角缩放，Shift 保持比例。</small>
       <div class="shape-stage">
         <div class="shape-sheet" id="shapeSheet">
           <img id="shapeReference" alt="" hidden draggable="false">
-          <svg id="shapeCanvas" aria-label="部件轮廓" role="img"></svg>
+          <svg id="shapeCanvas" tabindex="0" aria-label="部件轮廓" role="img"></svg>
         </div>
-        <aside id="shapePeek" class="shape-peek" hidden>
-          <header><b>体块预览</b><small>与画布同步 · 拖拽旋转</small></header>
-          <svg id="peekSvg" role="img" aria-label="三维体块预览"></svg>
-        </aside>
+
       </div>
       <p id="shapeHint" class="shape-hint"></p>
     </section>
     <aside class="shape-properties" aria-label="部件参数与推敲">
-      <header class="shape-section-head"><h2 id="partTitle">部件参数</h2><button type="button" id="toggleLock" hidden></button><button type="button" id="lockOthers" hidden title="锁定除当前部件以外的全部部件">锁定其余</button></header>
-      <p id="choosePart" class="shape-muted">添加或选中一个部件，查看它的位置、尺寸和角度。</p>
-      <div id="shapePartDetails" hidden>
-        <form id="partForm">
-          <fieldset id="partFields">
-            <label class="wide" for="partName">名称<input id="partName" maxlength="60" required></label>
-            <label for="partX">中心 X（px）<input id="partX" type="number" step="any" required></label>
-            <label for="partY">中心 Y（px）<input id="partY" type="number" step="any" required></label>
-            <label for="partWidth">宽度（px）<input id="partWidth" type="number" step="any" min="8" required></label>
-            <label for="partHeight">高度（px）<input id="partHeight" type="number" step="any" min="8" required></label>
-            <label for="partDepth">厚度（px）<input id="partDepth" type="number" step="any" min="4" required></label>
-            <label for="partAngle">角度（°）<input id="partAngle" type="number" step="any" min="-180" max="180" required></label>
-            <button class="shape-primary wide" type="submit" id="savePart">保存参数</button>
-          </fieldset>
-        </form>
-        <section class="shape-controls" aria-labelledby="variantTitle">
-          <h2 id="variantTitle">规则推敲</h2>
-          <form id="variantForm" class="shape-row">
-            <label for="variantField">变化维度<select id="variantField"><option value="width">宽度</option><option value="height">高度</option><option value="depth">厚度</option><option value="angle">角度</option></select></label>
-            <label for="variantAmount" id="variantAmountLabel"><span>幅度（%）</span><input id="variantAmount" type="number" min="5" max="40" value="20" required></label>
-            <button type="submit" id="generateVariants">生成候选</button>
-          </form>
-        </section>
-        <section class="shape-controls" aria-labelledby="partAiTitle">
-          <h2 id="partAiTitle">本机 AI 精修</h2>
-          <form id="partAiForm">
-            <label for="partPrompt">只编辑当前部件</label>
-            <textarea id="partPrompt" rows="2" maxlength="1200" placeholder="例如 给灯罩加细密竖纹"></textarea>
-            <div class="shape-tools"><button type="submit" id="partAiRun">生成精修图</button><button type="button" id="partAiCancel" hidden>取消</button></div>
-          </form>
-          <a href="admin.html?source=comfy" class="shape-text-link">本机模型设置</a>
-        </section>
+        <aside id="shapePeek" class="shape-peek" hidden>
+          <header><b>体块预览</b><small>与画布同步 · 拖拽旋转</small></header>
+          <svg id="peekSvg" role="img" aria-label="三维体块预览"></svg>
+        </aside>
         <section class="shape-controls" aria-labelledby="liveTitle">
-          <h2 id="liveTitle">实时辅助（锁定感知）</h2>
-          <p class="shape-muted" id="liveHint">结构渲染：按当前所有部件轮廓出产品效果图，锁定部件轮廓不变。局部重绘：只重画选中部件，适合已有渲染底图。</p>
+          <h2 id="liveTitle">实时辅助</h2>
+          <p class="shape-muted" id="liveHint">拖动时先看轮廓，出图后看材质与光影。</p>
           <label for="liveMode" class="shape-muted">模式
             <select id="liveMode">
               <option value="render">结构渲染 · 跟随轮廓出效果图</option>
@@ -115,13 +84,68 @@
             <button type="button" id="liveRetry" hidden>重试</button>
           </div>
           <figure id="livePane" hidden>
-            <img id="liveImage" alt="实时辅助预览">
-            <figcaption><span id="liveState">等待调整</span></figcaption>
+            <button id="liveAdopt" type="button" disabled>采用局部帧为版本</button>
+            <div class="live-frame"><img id="liveImage" alt="实时辅助预览" hidden><svg id="liveOutline" aria-hidden="true"></svg></div>
+            <figcaption><span id="liveState" role="status">等待调整</span></figcaption>
           </figure>
+          <label for="liveTier" class="shape-muted">结构渲染画质
+            <select id="liveTier"><option value="speed">快速预览</option><option value="balanced" selected>均衡</option><option value="quality">细节确认</option></select>
+          </label>
           <label for="liveStrength" class="shape-muted">重绘强度 <output id="liveStrengthValue">60%</output></label>
           <input id="liveStrength" type="range" min="30" max="90" value="60">
         </section>
-        <button type="button" id="removePart" class="shape-danger">移除部件</button>
+      <header class="shape-section-head"><h2 id="partTitle">部件参数</h2><button type="button" id="toggleLock" hidden></button><button type="button" id="lockOthers" hidden title="锁定除当前部件以外的全部部件">锁定其余</button></header>
+      <p id="choosePart" class="shape-muted">添加或选中一个部件，查看它的位置、尺寸和角度。</p>
+      <div id="shapePartDetails" hidden>
+        <section class="shape-controls" aria-labelledby="tidyTitle">
+          <h2 id="tidyTitle">规整化</h2>
+          <p class="shape-muted" id="tidyHint">把描线轮廓吸附成标准几何；节点保留，随时可以再拖回手绘感。</p>
+          <div class="shape-tools">
+            <button type="button" id="tidySuggest" class="wide">按建议规整</button>
+          </div>
+          <div class="shape-tools" role="group" aria-label="手动规整为标准形">
+            <button type="button" data-tidy="circle">圆</button>
+            <button type="button" data-tidy="ellipse">椭圆</button>
+            <button type="button" data-tidy="rectangle">矩形</button>
+            <button type="button" data-tidy="rounded">圆角矩形</button>
+          </div>
+        </section>
+        <form id="partForm">
+          <fieldset id="partFields">
+            <label class="wide" for="partName">名称<input id="partName" maxlength="60" required></label>
+            <label for="partX">中心 X（px）<input id="partX" type="number" step="any" required></label>
+            <label for="partY">中心 Y（px）<input id="partY" type="number" step="any" required></label>
+            <label for="partWidth">宽度（px）<input id="partWidth" type="number" step="any" min="8" required></label>
+            <label for="partHeight">高度（px）<input id="partHeight" type="number" step="any" min="8" required></label>
+            <label for="partDepth">厚度（px）<input id="partDepth" type="number" step="any" min="4" required></label>
+            <label for="partAngle">角度（°）<input id="partAngle" type="number" step="any" min="-180" max="180" required></label>
+            <button class="shape-primary wide" type="submit" id="savePart">保存参数</button>
+          <label>等比缩放（%）<input type="number" id="partScale" value="100" min="1"></label>
+            <button type="button" id="scaleApply">应用缩放</button>
+          </fieldset>
+        </form>
+        <details class="shape-more" id="shapeMoreTools">
+          <summary>更多工具 · 规则推敲</summary>
+          <section class="shape-controls" aria-labelledby="variantTitle">
+            <h2 id="variantTitle">规则推敲</h2>
+            <form id="variantForm" class="shape-row">
+              <label for="variantField">变化维度<select id="variantField"><option value="width">宽度</option><option value="height">高度</option><option value="depth">厚度</option><option value="angle">角度</option></select></label>
+              <label for="variantAmount" id="variantAmountLabel"><span>幅度（%）</span><input id="variantAmount" type="number" min="5" max="40" value="20" required></label>
+              <button type="submit" id="generateVariants">生成候选</button>
+            </form>
+          </section>
+          <section class="shape-controls" aria-labelledby="partAiTitle" hidden>
+            <h2 id="partAiTitle">本机 AI 精修</h2>
+            <form id="partAiForm">
+              <label for="partPrompt">只编辑当前部件</label>
+              <textarea id="partPrompt" rows="2" maxlength="1200" placeholder="例如 给灯罩加细密竖纹"></textarea>
+              <div class="shape-tools"><button type="submit" id="partAiRun">生成精修图</button><button type="button" id="partAiCancel" hidden>取消</button></div>
+            </form>
+            <a href="admin.html?source=comfy" class="shape-text-link">本机模型设置</a>
+          </section>
+        </details>
+
+
       </div>
     </aside>
     <section class="shape-comparison" id="shapeComparison" aria-labelledby="compareTitle">

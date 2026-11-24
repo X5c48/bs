@@ -55,10 +55,11 @@
   }
 
   // 描线部件的节点手柄（P2）：选中、未锁定、非三视图时显示，拖锚点改轮廓
+  let pickedNode=null;
   function nodeHandlesOf(part,invalid){
     if(!part||part.locked||part.shape!=='polygon'||!Array.isArray(part.points)) return [];
     const angle=part.angle*Math.PI/180,c=Math.cos(angle),s=Math.sin(angle);
-    return part.points.map((point,index)=>{
+    return part.points.flatMap((point,index)=>{
       const x=part.x+point.x*part.width*c-point.y*part.height*s;
       const y=part.y+point.x*part.width*s+point.y*part.height*c;
       const node=svg('circle');
@@ -66,7 +67,20 @@
       node.setAttribute('class','shape-node'+(invalid?' is-invalid':''));
       node.style.cursor='crosshair';
       node.dataset.node=String(index);node.dataset.part=part.id;
-      return node;
+      if(pickedNode?.id!==part.id||pickedNode.index!==index) return [node];
+      node.style.stroke='#d25913';
+      const handles=[];
+      for(const side of ['in','out']){
+        const actual=model.world(part,point[side]||point);
+        // 零长度手柄显示在锚点两侧，直到第一次拖动才写入轮廓。
+        if(Math.hypot(actual.x-x,actual.y-y)<1) actual.x+=side==='in'?-14:14;
+        handles.push(guideLine(x,y,actual.x,actual.y));
+        const handle=node.cloneNode(false);
+        handle.dataset.control=side;
+        handle.setAttribute('cx',actual.x);handle.setAttribute('cy',actual.y);
+        handle.style.fill='#ffb477'; handles.push(handle);
+      }
+      return [...handles,node];
     });
   }
   function cachedUrl(blobId){
@@ -170,17 +184,31 @@
       // 俯视标签放在俯视格上方（放在下方会超出 viewBox 被裁掉）
       nodes.push(viewLabel('俯视 '+current0.width+'×'+spanRounded,current0.width/2,top.y-10));
     }else{
-      const invalid=gesture?.mode==='node'&&gesture.invalid===true;
+      const invalid=gesture?.kind==='node'&&gesture.invalid===true;
       for(const part of parts()){
         const shown=shownOf(part);
         nodes.push(drawPolygon(shown,{selected:part.id===selected,invalid:invalid&&part.id===selected}));
       }
       const active=parts().find(part=>part.id===selected);
-      nodes.push(...nodeHandlesOf(active,invalid));
+      if(active&&!active.locked&&!trace){
+        const shown=shownOf(active);
+        for(const sx of [-1,1]) for(const sy of [-1,1]){
+          const corner=model.world(shown,{x:sx*(.5+8/shown.width),y:sy*(.5+8/shown.height)});
+          const handle=svg('rect');
+          handle.setAttribute('x',corner.x-4.5);handle.setAttribute('y',corner.y-4.5);
+          handle.setAttribute('width',9);handle.setAttribute('height',9);
+          handle.setAttribute('class','shape-handle');handle.dataset.scale=active.id;
+          handle.dataset.sx=sx;handle.dataset.sy=sy;
+          handle.style.cursor=sx===sy?'nwse-resize':'nesw-resize';nodes.push(handle);
+        }
+        nodes.push(...nodeHandlesOf(shown,invalid));
+      }
     }
     if(gesture?.points){
+      // 描线预览必须进 nodes 一起提交：之前是单独 append，紧接着 replaceChildren 就把它抹掉了，
+      // 表现为「描轮廓时看不到自己画的线」。
       const line=svg('polyline');line.setAttribute('class','trace-line');line.setAttribute('points',pointString(gesture.points));
-      canvas.append(line);
+      nodes.push(line);
     }
     canvas.replaceChildren(...nodes.filter(Boolean));
     const ref=current.draft.reference, image=$('shapeReference'), useRef=!layout&&!!ref&&$('showReference').checked;
@@ -195,24 +223,15 @@
 
   // ── 体块预览小窗：部件包围盒挤出，与画布同步，可拖拽旋转 ──
   const peekSvg=$('peekSvg');
-  // 预览窗跟随画布右缘固定在视口内，避免页面滚动后跑到折叠线以下被裁切
-  function placePeek(){
-    const peek=$('shapePeek');
-    if(peek.hidden) return;
-    const rect=canvas.getBoundingClientRect();
-    peek.style.right=Math.max(12,Math.round(window.innerWidth-rect.right+12))+'px';
-    peek.style.bottom='12px';
-  }
-  window.addEventListener('resize',placePeek);
   function tint(hex,k){
     const n=parseInt(hex.slice(1),16),c=v=>Math.round(v*k);
     return 'rgb('+c(n>>16&255)+','+c(n>>8&255)+','+c(n&255)+')';
   }
   function renderPeek(){
-    const list=parts();
+    const list=parts().map(part=>gesture?.part?.id===part.id?gesture.part:part);
+    drawLiveOutline(list);
     $('shapePeek').hidden=!list.length;
-    if(!list.length) return;
-    placePeek();
+    if(!list.length){peekSvg.replaceChildren();return;}
     const drawn=[...list]
       .sort((a,b)=>model.blockDepth(b,orbit.az)-model.blockDepth(a,orbit.az))
       .map(part=>({part,faces:model.blockFaces(part,orbit.az,orbit.el)}));
@@ -258,6 +277,7 @@
   function updateButtons(){
     const part=active(), restricted=busy||!part||part.locked;
     $('partFields').disabled=restricted;
+    $('removePart').title=part?.locked?'先解锁此部件，再删除。':part?'删除「'+part.name+'」':'请先选择一个部件。';
     for(const key of ['generateVariants','variantField','variantAmount','partAiRun','partPrompt','removePart']) $(key).disabled=restricted;
     for(const key of ['tracePart','addRectangle','addEllipse','loadExample','toggleLock','vectorize','lockOthers']) $(key).disabled=busy;
     $('tracePart').disabled=busy||triView;
@@ -282,6 +302,7 @@
       row.append(button);return row;
     }));
     const part=active();
+    if(selected!==lastSelected){lastSelected=selected;if(liveOn&&$('liveMode').value==='region') resetLiveImage();scheduleLiveShape();}
     $('choosePart').hidden=!!part;
     $('shapePartDetails').hidden=!part;
     $('toggleLock').hidden=!part;
@@ -293,6 +314,7 @@
       $('toggleLock').setAttribute('aria-pressed',String(part.locked));
       for(const [key,control] of Object.entries(fields)) control.value=part[key];
     }
+    syncTidy();
     $('shapeHint').textContent=trace?'在画布沿部件边缘拖动，松开后闭合轮廓。':
       triView?'正视格拖动部件；侧视格左右拖、俯视格前后拖调整深度位置；方块手柄调整厚度。':
       items.length?'选中部件可拖动位置；描线部件可直接拖圆点改节点，自交会自动退回。勾选「三视图」查看侧视与俯视。':'添加基本形状，用「描轮廓」沿底图勾画，或用「矢量化底图」自动拆分线稿。';
@@ -382,10 +404,9 @@
     $('shapeTitle').textContent=asset().name;
     document.title=asset().name+' · 部件推敲 · 物映';
     $('shapeDimensions').textContent=asset().width+' × '+asset().height+' px';
-    // 过期标记：结构改过之后，下游阶段的旧结果可能过期（橙点提示）
-    for(const [stage,anchor] of [['ortho',$('railOrtho')],['render',$('railRender')]]){
-      anchor.classList.toggle('is-stale',stageBook.staleOf(asset()?.flow,stage));
-    }
+    // 过期标记：三视图归到产品渲染下，任一取景方式的旧结果过期都在同一段提示。
+    $('railRender').classList.toggle('is-stale',
+      stageBook.staleOf(asset()?.flow,'render')||stageBook.staleOf(asset()?.flow,'ortho'));
     renderControls();renderCanvas();renderVersions();renderAi();
   }
 
@@ -409,9 +430,27 @@
     try{
       doc=await store.change(current=>{
         const draft=liveAsset(current,revision);
+        const frontView=draft.design?.views?.front;
+        if(frontView&&!frontView.renderBase&&draft.draft.reference){
+          frontView.renderBase={blobId:draft.draft.reference.blobId,parts:structuredClone(draft.draft.parts),revision};
+        }
         const next=updater(draft.draft.parts,draft);
+        const previous=draft.draft.parts;
+        if(frontView?.renderBase){
+          for(const part of next) if(!previous.some(item=>item.id===part.id)&&!frontView.renderBase.parts.some(item=>item.id===part.id)){
+            frontView.renderBase.parts.push(structuredClone(part));
+          }
+        }
         draft.draft.parts=next;
         draft.draft.revision=uid();
+        if(draft.design?.views?.front){
+          const front=draft.design.views.front;
+          for(const part of next){
+            if(previous.find(old=>old.id===part.id)!==part) front.outlines[part.id]=model.outline(part);
+          }
+          for(const old of previous) if(!next.some(part=>part.id===old.id)) delete front.outlines[old.id];
+          front.revision=draft.design.revision=draft.draft.revision;
+        }
         // P0 过期标记：部件结构修订号变了，基于旧修订号生成的三视图/渲染结果标过期
         if(draft.flow?.stages&&(draft.flow.stages.ortho||draft.flow.stages.render)){
           const flowNext={...draft.flow,stages:{...draft.flow.stages}};
@@ -421,8 +460,8 @@
         draft.updatedAt=Math.max(Date.now(),(draft.updatedAt||0)+1);
       });
     }catch(error){doc=await store.read();throw error;}
-    show(message);
-    scheduleLiveShape();
+    show(typeof message==='function'?message():message);
+    scheduleLiveShape(500);
   }
 
   function nextName(items){return '部件 '+(items.length+1);}
@@ -507,17 +546,40 @@
     await saveDraft((items,source0)=>{
       const next=[...items];
       for(const candidate of found){
-        try{ next.push(model.tracePart(uid(),nextName(next),candidate.points,source0)); created++; }
+        try {
+          const traced=model.tracePart(uid(),nextName(next),candidate.points,source0);
+          const fit=model.regularize(traced,source0);
+          next.push(fit.ok && fit.score >= .82 ? fit.part : traced);
+          created++;
+        }
         catch{ /* 轮廓不闭合或过于复杂：跳过，不打断其余部件 */ }
       }
       if(!created) throw new Error('识别到的轮廓不够闭合，先整理线稿再试。');
       return next;
-    },'已从底图矢量化出 '+created+' 个部件（共识别 '+found.length+' 个轮廓）。');
+    },()=>'已从底图矢量化出 '+created+' 个部件（共识别 '+found.length+' 个轮廓）。');
     if(created) selected=null;
   });
   $('removePart').onclick=()=>void task(async()=>{
     const part=active();
-    if(part) await saveDraft(items=>model.removePart(items,part.id),'已移除 '+part.name+'。');
+    if(!part||part.locked) return;
+    const index=parts().findIndex(item=>item.id===part.id);
+    await saveDraft((items,source)=>{
+      const remaining=model.removePart(items,part.id);
+      if(source.design){
+        delete source.design.parts[part.id];delete source.design.locks[part.id];
+        for(const view of Object.values(source.design.views||{})) if(view.outlines) delete view.outlines[part.id];
+        const span=model.depthSpan(remaining);
+        source.design.bounds.depth=span.max-span.min;
+      }
+      return remaining;
+    },'已删除 '+part.name+'。');
+    pickedNode=null;selected=parts()[Math.min(index,parts().length-1)]?.id||null;
+    resetLiveImage();
+    if(liveOn&&$('liveMode').value==='region'&&parts().length){
+      $('liveMode').value='render';updateLiveControls();
+      show('部件已删除，已切换到结构渲染以预览剩余部件。');
+    }
+    if(!parts().length&&liveOn) setLiveShape(false);
   });
   $('partForm').onsubmit=event=>{
     event.preventDefault();
@@ -529,6 +591,48 @@
   $('variantField').onchange=()=>{
     $('variantAmountLabel').firstElementChild.textContent=$('variantField').value==='angle'?'幅度（°）':'幅度（%）';
   };
+
+  // ── 规整化：描线吸附标准几何，产物仍是可拖节点 ──
+  const tidyNames={circle:'圆',ellipse:'椭圆',rectangle:'矩形',rounded:'圆角矩形'};
+  function syncTidy(){
+    const part=active();
+    const hint=$('tidyHint'),suggest=$('tidySuggest');
+    const buttons=[...document.querySelectorAll('[data-tidy]')];
+    const editable=!!part&&!part.locked&&part.shape==='polygon';
+    for(const button of buttons) button.disabled=!editable;
+    suggest.disabled=!editable;
+    if(!part){hint.textContent='先选中一个部件。';suggest.hidden=false;suggest.textContent='按建议规整';return;}
+    if(part.locked){hint.textContent='部件已锁定，先解除锁定再规整。';suggest.hidden=false;suggest.textContent='按建议规整';return;}
+    if(part.shape!=='polygon'){
+      hint.textContent='已经是标准'+model.shapeNames[part.shape]+'，拖节点或用参数微调即可。';
+      suggest.hidden=false;suggest.textContent='按建议规整';return;
+    }
+    const info=model.describeOutline(part);
+    if(!info){hint.textContent='这个部件没有可规整的轮廓。';return;}
+    const {suggestion}=info;
+    suggest.hidden=!suggestion.target;
+    suggest.textContent=suggestion.target
+      ?'建议规整为'+tidyNames[suggestion.target]+'（匹配 '+Math.round(suggestion.score*100)+'%）'
+      :'轮廓更接近自由造型';
+    hint.textContent=suggestion.target
+      ?'吸附成'+tidyNames[suggestion.target]+'后仍是可拖节点，随时能改回局部形状。'
+      :'自由造型不会被强行掰圆；需要的话在下面手动选一个标准形。';
+  }
+  function applyTidy(target){
+    const part=active();
+    if(!part||busy) return;
+    let result;
+    try{ result=model.regularize(part,asset(),target?{target}:{}); }
+    catch(error){show(error.message,true);return;}
+    if(!result.ok){show(result.message||'这个轮廓暂时无法规整。',true);return;}
+    if(!target&&!result.changed){show('这个部件已经是所选标准形了。');return;}
+    const label=tidyNames[result.target]||'标准形';
+    void task(()=>saveDraft((items,source)=>model.updatePart(items,part.id,{
+      x:result.part.x,y:result.part.y,width:result.part.width,height:result.part.height,
+      angle:0,points:result.part.points},source),'已规整为'+label+'，节点仍可拖动微调。'));
+  }
+  $('tidySuggest').onclick=()=>applyTidy(null);
+  for(const button of document.querySelectorAll('[data-tidy]')) button.onclick=()=>applyTidy(button.dataset.tidy);
 
   function childPosition(current,source,index){
     const x=source.x+320;
@@ -593,11 +697,49 @@
     const limit=gesture?.layout||(triView?triLayout():asset());
     return {x:Math.min(limit.width,Math.max(0,point.x)),y:Math.min(limit.height,Math.max(0,point.y))};
   }
+  function commitNodes(part,result,message){
+    if(!result.ok){show('轮廓必须闭合、至少有三个节点且不自交。',true);return;}
+    void task(()=>saveDraft((items,source)=>model.updatePart(items,part.id,{points:result.part.points},source),message));
+  }
+  function insertAt(event){
+    const part=active();
+    if(busy||trace||triView||part?.shape!=='polygon'||part.locked) return;
+    const hit=model.nearestSegment(part,canvasPoint(event));
+    if(hit.distance*canvas.getScreenCTM().a>10||hit.t<.002||hit.t>.998) return;
+    const result=model.editNode(part,hit.index,'insert',hit.t);
+    if(result.ok) pickedNode={id:part.id,index:hit.index+1};
+    commitNodes(part,result,'已在线段上添加节点。');
+    return true;
+  }
+  canvas.onkeydown=event=>{
+    const part=active();
+    if(event.key!=='Delete'||busy||gesture||triView||trace||!part||part.locked||pickedNode?.id!==part.id) return;
+    event.preventDefault();
+    const result=model.editNode(part,pickedNode.index,'delete');
+    if(result.ok) pickedNode=null;
+    commitNodes(part,result,'已删除选中节点。');
+  };
+  $('scaleApply').onclick=()=>void task(()=>{
+    const part=active(),scale=$('partScale').valueAsNumber/100;
+    if(!part||!Number.isFinite(scale)||scale<=0) throw new Error('请填写正的缩放比例。');
+    return saveDraft((items,source)=>model.updatePart(items,part.id,{width:part.width*scale,height:part.height*scale,depth:part.depth*scale},source),'已按比例缩放部件。');
+  });
+  let lastPress=null;
   canvas.onpointerdown=event=>{
     if(event.button!==0||busy||gesture) return;
     const layout=triView?triLayout():null;
     const start=canvasPoint(event);
-    if(trace&&!layout){
+    const previous=lastPress;
+    lastPress={x:event.clientX,y:event.clientY,time:event.timeStamp,id:selected};
+    if(!trace&&!layout&&!event.target.closest('[data-node],[data-scale]')&&previous?.id===selected&&
+       event.timeStamp-previous.time<450&&Math.hypot(previous.x-event.clientX,previous.y-event.clientY)<5&&insertAt(event)){
+      lastPress=null;canvas.focus({preventScroll:true});return;
+    }
+    if(event.target.dataset.scale&&!layout){
+      const part=active();
+      if(!part||part.locked) return;
+      gesture={id:event.pointerId,kind:'scale',sx:Number(event.target.dataset.sx),sy:Number(event.target.dataset.sy),start,source:part,part};
+    }else if(trace&&!layout){
       gesture={id:event.pointerId,points:[start]};
     }else{
       const nodeEl=event.target.closest('[data-node]');
@@ -605,8 +747,10 @@
         // P2 节点拖动：描线部件的锚点，未锁定时才可拖
         const part=parts().find(item=>item.id===nodeEl.dataset.part);
         if(part&&!part.locked&&part.shape==='polygon'){
+          pickedNode={id:part.id,index:Number(nodeEl.dataset.node)};
+          canvas.focus({preventScroll:true});
           selected=part.id;renderControls();
-          gesture={id:event.pointerId,kind:'node',index:Number(nodeEl.dataset.node),source:part,part,layout:null,invalid:false};
+          gesture={id:event.pointerId,control:nodeEl.dataset.control,kind:'node',index:Number(nodeEl.dataset.node),source:part,part,layout:null,invalid:false};
         }
       }else{
       const handle=event.target.closest('[data-handle]');
@@ -645,9 +789,15 @@
       const angle=part.angle*Math.PI/180,c=Math.cos(angle),s=Math.sin(angle);
       const dx=point.x-part.x,dy=point.y-part.y;
       const local={x:(dx*c+dy*s)/(part.width||1),y:(-dx*s+dy*c)/(part.height||1)};
-      const result=model.moveNode(part,gesture.index,local);
+      const result=model.editNode(part,gesture.index,gesture.control||'anchor',local,event.altKey);
       if(result.ok){ gesture.part=result.part; gesture.invalid=false; }
       else gesture.invalid=true;
+    }else if(gesture.kind==='scale'){
+      const {source,start}=gesture,rad=source.angle*Math.PI/180;
+      const dx=point.x-start.x,dy=point.y-start.y;
+      const width=source.width+2*gesture.sx*(dx*Math.cos(rad)+dy*Math.sin(rad));
+      const height=event.shiftKey?source.height*width/source.width:source.height+2*gesture.sy*(dy*Math.cos(rad)-dx*Math.sin(rad));
+      try{gesture.part=model.updatePart([source],source.id,{width,height},asset())[0];}catch{}
     }else if(gesture.kind==='move'){
       const {source,start}=gesture;
       const patch={x:source.x+point.x-start.x,y:source.y+point.y-start.y};
@@ -660,11 +810,20 @@
       gesture.part={...gesture.source,depth:Math.max(4,Math.round((gesture.source.depth+delta)*100)/100)};
     }
     renderCanvas();
+    // 拖动中每 140ms 记录一次最新几何；渲染进行中也照常记录，不再丢帧
+    if(liveOn&&gesture.part&&!gesture.invalid&&performance.now()-lastDragSample>=140){
+      lastDragSample=performance.now();
+      scheduleLiveShape(0);
+    }
   };
   canvas.onpointerup=event=>{
     if(gesture?.id!==event.pointerId) return;
     const final=gesture;
     gesture=undefined;renderCanvas();
+    if(liveOn){
+      if(dragRequest) liveController?.abort();
+      scheduleLiveShape(500);
+    }
     if(final.points){
       const partId=uid();
       void task(async()=>{
@@ -676,6 +835,9 @@
         void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{points:final.part.points},source),
           '已调整 '+final.part.name+' 的节点。'));
       }
+    }else if(final.kind==='scale'&&final.part!==final.source){
+      const {width,height}=final.part;
+      void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{width,height},source),'已缩放部件。'));
     }else if(final.kind==='move'){
       if(final.part.x!==final.source.x||final.part.y!==final.source.y){
         void task(()=>saveDraft((items,source)=>model.updatePart(items,final.part.id,{x:final.part.x,y:final.part.y},source),'已移动 '+final.part.name+'。'));
@@ -690,7 +852,7 @@
       }
     }
   };
-  canvas.onpointercancel=()=>{gesture=undefined;renderCanvas();};
+  canvas.onpointercancel=()=>{gesture=undefined;renderCanvas();scheduleLiveShape(500);};
 
   $('partAiForm').onsubmit=event=>{
     event.preventDefault();
@@ -721,14 +883,8 @@
   // （外扩是为了把旧轮廓的线条一起重绘掉）；条件图是新轮廓的栅格化线稿，走 ControlNet
   // 锁住形状，避免模型自由发挥；渲染完把补丁合成回底图预览，锁定部件永不改动。
   let liveOn=false, liveBusy=false, liveTimer, liveController, liveSeed=crypto.getRandomValues(new Uint32Array(1))[0], liveUrl='';
-  const liveParts=()=>{ const part=active(); return part&&!part.locked?{edit:part,locked:parts().filter(item=>item.locked&&item.id!==part.id)}:null; };
+  const liveParts=()=>{ const part=gesture?.part?.id===selected?gesture.part:active(); return part&&!part.locked?{edit:part,locked:parts().filter(item=>item.locked&&item.id!==part.id)}:null; };
   const partPoints=(part,width,height)=>model.polygon(part).map(({x,y})=>({x:x/width,y:y/height}));
-  // 遮罩外扩：以质心为基准放大轮廓，让重绘覆盖到旧轮廓线（沿部件最小边的固定比例）
-  function dilatePolygon(points,factor=1.05){
-    const cx=points.reduce((sum,p)=>sum+p.x,0)/points.length;
-    const cy=points.reduce((sum,p)=>sum+p.y,0)/points.length;
-    return points.map(p=>({x:cx+(p.x-cx)*factor,y:cy+(p.y-cy)*factor}));
-  }
   // 线稿条件图：把当前轮廓（含其他部件轮廓作上下文）栅格化到裁剪尺寸，喂给 ControlNet
   function buildGuideBlob(prepared,edit,size){
     const {crop}=prepared;
@@ -738,7 +894,7 @@
     const ctx=sheet.getContext('2d');
     ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);
     const sx=width/crop.width,sy=height/crop.height;
-    const map=point=>({x:(point.x*size.width-crop.x)*sx,y:(point.y*size.height-crop.y)*sy});
+    const map=point=>({x:(point.x-crop.x)*sx,y:(point.y-crop.y)*sy});
     const trace=points=>{
       const mapped=points.map(map);
       ctx.beginPath();
@@ -750,7 +906,10 @@
     ctx.lineWidth=Math.max(1.5,width/260);ctx.globalAlpha=.4;
     for(const part of parts()) if(part.id!==edit.id) trace(model.polygon(part));
     ctx.globalAlpha=1;
-    ctx.lineWidth=Math.max(3,width/110);
+    // 细长部件（表针等）的描边不能盖过自身宽度，否则条件图里只剩一团黑
+    const bounds=model.outlineBounds(edit);
+    const dim=Math.min(bounds.width,bounds.height);
+    ctx.lineWidth=Math.min(Math.max(3,width/110),Math.max(1.5,dim*.4));
     trace(model.polygon(edit));
     return new Promise(resolve=>sheet.toBlob(resolve,'image/png'));
   }
@@ -765,22 +924,68 @@
       const data=await response.json();
       const names=data?.ControlNetLoader?.input?.required?.control_net_name?.[0]||[];
       controlnetCache=names.find(name=>/scribble|lineart|line[_-]art/i.test(name))||names[0]||'';
-    }catch{ controlnetCache=''; }
+    }catch{ return ''; }
     return controlnetCache;
+  }
+  function resetLiveImage(){
+    liveRevision++;liveController?.abort();liveFrame=null;
+    $('liveAdopt').disabled=true;
+    $('liveImage').hidden=true;$('liveImage').removeAttribute('src');
+    if(liveUrl){URL.revokeObjectURL(liveUrl);liveUrl='';}
+  }
+  function drawLiveOutline(items){
+    if(!liveOn) return;
+    const overlay=$('liveOutline'),size=asset();
+    overlay.parentElement.style.aspectRatio=size.width+'/'+size.height;
+    overlay.setAttribute('viewBox','0 0 '+size.width+' '+size.height);
+    overlay.replaceChildren();
+    // 出图后轮廓线仍然保留在预览之上（半透明深色），方便对照渲染结果与造型是否一致；
+    // 旧逻辑在这里直接 return，导致「渲染结果里看不到产品轮廓」。
+    const onRender=!!liveUrl&&!livePending;
+    for(const part of items){
+      const line=svg('polygon');
+      line.setAttribute('points',pointString(model.polygon(part)));
+      line.setAttribute('fill',liveUrl?'none':'#d9d5cb');
+      line.setAttribute('stroke',part.id===selected?'#816bff':onRender?'rgba(20,20,22,.55)':'#8190a5');
+      line.setAttribute('stroke-width',onRender?'1':'1.5');
+      line.setAttribute('vector-effect','non-scaling-stroke');
+      if(onRender)line.setAttribute('class','live-contour');
+      overlay.append(line);
+    }
   }
   function liveState(message,error=false){
     $('liveState').textContent=message;
     $('liveState').dataset.error=String(error);
     $('liveRetry').hidden=!error;
   }
-  function scheduleLiveShape(){
+  let liveRevision=0, livePending=false, dragRequest=false;
+  let lastDragSample=-Infinity, liveFrame=null, lastSelected=null, liveDue=0;
+  function scheduleLiveShape(delay=140){
     if(!liveOn) return;
     clearTimeout(liveTimer);
-    liveTimer=setTimeout(()=>void renderLiveShape(),500);
+    liveDue=performance.now()+(typeof delay==='number'?delay:140);
+    livePending=true;
+    // Qwen 单帧十几秒，拖动期间出图只会堆积无用请求：只同步轮廓，松手后出一帧。
+    if(gesture&&qwenPref(flow.modelPrefs())){
+      livePending=false;
+      drawLiveOutline(parts().map(p=>gesture?.part?.id===p.id?gesture.part:p));
+      liveState('拖动中只更新轮廓；松手后用 Qwen 出预览（约 15 秒）。');
+      return;
+    }
+    if(!liveBusy){
+      // 几何真的变了：作废旧帧与在途结果，按新轮廓排队渲染
+      liveFrame=null;$('liveAdopt').disabled=true;
+      liveRevision++;
+      liveTimer=setTimeout(()=>void renderLiveShape(),Math.max(0,liveDue-performance.now()));
+    }
+    // 渲染中继续拖动：只记录最新到期时间，不丢弃采样也不作废在途请求——
+    // 在途帧完成后照常显示（快速反馈），随后按最新几何补一帧
+    drawLiveOutline(parts().map(p=>gesture?.part?.id===p.id?gesture.part:p));
+    liveState(liveBusy?'已记录调整，正在更新预览…':'轮廓已更新，等待渲染…');
   }
   // 结构条件渲染：把所有部件的当前轮廓画成一张结构图（灰面 + 深色边），
   // 走 scribble ControlNet 出整图产品效果图。锁定部件因为轮廓就在结构图里，形态不会变。
-  function buildStructureBlob(size){
+  function buildStructureBlob(size,items){
     const sheet=document.createElement('canvas');
     sheet.width=size.width;sheet.height=size.height;
     const ctx=sheet.getContext('2d');
@@ -790,7 +995,9 @@
       ctx.globalAlpha=alpha;
       ctx.fillStyle=fill;
       ctx.strokeStyle='#1d1d1f';
-      ctx.lineWidth=Math.max(3,size.width/260);
+      // 细长部件的描边按自身尺寸收窄，避免在结构图里被涂成实心黑块（秒针等问题）
+      const box=model.outlineBounds(part);
+      ctx.lineWidth=Math.min(Math.max(3,size.width/260),Math.max(1.5,Math.min(box.width,box.height)*.4));
       ctx.lineJoin='round';ctx.lineCap='round';
       ctx.beginPath();
       points.forEach((point,index)=>index?ctx.lineTo(point.x,point.y):ctx.moveTo(point.x,point.y));
@@ -798,7 +1005,7 @@
       ctx.fill();ctx.stroke();
       ctx.globalAlpha=1;
     };
-    for(const part of parts()) draw(part,part.locked?'#c9c9cc':'#dedede',1);
+    for(const part of items) draw(part,'#fff',1);
     return new Promise(resolve=>sheet.toBlob(resolve,'image/png'));
   }
   function livePrompt(subject){
@@ -810,53 +1017,77 @@
     ].filter(Boolean).join(', ');
   }
   const liveNegative='lowres, worst quality, low quality, jpeg artifacts, blurry, out of focus, watermark, text, extra objects, cluttered, deformed, sketch, lineart, outline, white background with black lines';
+  // Qwen 分体式模型不能走 SD 实时工作流（CheckpointLoaderSimple 会 400），单独走 Qwen 通道。
+  const qwenPref=prefs=>/^qwen[_ ]?image/i.test(String(prefs?.checkpoint||''));
   async function renderStructure(prefs,size,subject){
-    // 尺寸保持画布比例，长边 768（实时帧够快且细节够看）
-    const long=768;
+    // 拖动预览用更小的长边（512）换响应速度，松手后的最终帧回到 768
+    const tier=gesture?'speed':$('liveTier').value;
+    const long=gesture?512:768;
     const ratio=size.width/size.height;
     const latentWidth=ratio>=1?long:Math.round(long*ratio/8)*8;
     const latentHeight=ratio>=1?Math.round(long/ratio/8)*8:long;
-    const structure=await buildStructureBlob(size);
+    const structure=await buildStructureBlob(size,parts().map(part=>gesture?.part?.id===part.id?gesture.part:part));
+    // Qwen：结构图（白底实体 + 深色边）直接当参考图，造型与比例跟着它走；不接 ControlNet。
+    if(qwenPref(prefs)){
+      const {blob}=await window.WuyingComfy.renderQwen({
+        endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,
+        prompt:livePrompt(subject),negative:liveNegative,
+        sourceImage:structure,resolution:gesture?512:Number($('liveTier').value==='quality'?640:576),
+        seed:liveSeed,slot:'shape-live-'+id.slice(0,8),
+        cancelPending:true,signal:liveController.signal,onStatus:()=>{}
+      });
+      return {blob,controlnet:''};
+    }
     const controlnet=await resolveControlnet(prefs);
     const {blob}=await window.WuyingComfy.renderLive({
       endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,controlnet,
       prompt:livePrompt(subject),negative:liveNegative,input:'sketch',quality:'live',
       sourceImage:structure,strength:.9,seed:liveSeed,
-      latentWidth,latentHeight,tier:'balanced',
+      latentWidth,latentHeight,tier,
       slot:'shape-live-'+id.slice(0,8),signal:liveController.signal,onStatus:()=>{}
     });
     return {blob,controlnet};
   }
   async function renderRegion(prefs,target,size,subject){
-    const sourceBlob=await store.getBlob(asset()?.draft?.reference?.blobId);
-    if(!sourceBlob) throw new Error('底图丢失，无法局部重绘。');
-    // 遮罩比轮廓外扩 5%，连旧轮廓线一起重绘，避免新旧边线叠影
-    const maskPoints=dilatePolygon(partPoints(target.edit,size.width,size.height),1.05);
-    const prepared=await window.WuyingImageSelection.prepare(sourceBlob,maskPoints,
-      target.locked.map(part=>partPoints(part,size.width,size.height)));
+    const draft=size.draft,base=size.design?.views?.front?.renderBase;
+    const sourceBlob=await store.getBlob(base?.blobId||draft.reference?.blobId);
+    if(!sourceBlob) throw new Error('找不到局部重绘底图。');
+    const before=(base?.parts||draft.parts).find(part=>part.id===target.edit.id)||target.edit;
+    const points=part=>partPoints(part,size.width,size.height);
+    const prepared=await window.WuyingImageSelection.prepare(sourceBlob,points(target.edit),target.locked.map(points),
+      {previous:points(before),longEdge:target.preview?448:640,
+        cleanInk:(!base||base.blobId===draft.reference?.blobId)&&size.layers?.some(layer=>layer.kind==='ink'&&layer.strokes?.length)
+          &&size.layers.every(layer=>layer.visible===false||layer.kind==='ink')&&
+          JSON.stringify(points(before))!==JSON.stringify(points(target.edit)),
+        inkStrokes:size.layers?.filter(layer=>layer.visible!==false && layer.opacity!==0 && layer.kind==='ink').flatMap(layer=>layer.strokes||[]),
+        neighbors:draft.parts.filter(part=>part.id!==target.edit.id).map(points)});
     const guideBlob=await buildGuideBlob(prepared,target.edit,size);
     const controlnet=await resolveControlnet(prefs);
     const {blob}=await window.WuyingComfy.renderRegion({
       endpoint:prefs.endpoint,checkpoint:prefs.checkpoint,prompt:livePrompt(subject),
       sourceImage:prepared.sourceImage,maskImage:prepared.maskImage,
-      guideImage:guideBlob,controlnet,controlStrength:.85,
+      guideImage:guideBlob,controlnet,controlStrength:.85,liveTier:target.preview?'speed':'balanced',
       denoise:Number($('liveStrength').value)/100,seed:liveSeed,
       slot:'shape-live-'+id.slice(0,8),signal:liveController.signal,onStatus:()=>{}
     });
-    return {blob:await window.WuyingImageSelection.composite(prepared,blob,{feather:6}),controlnet};
+    return {blob:await window.WuyingImageSelection.composite(prepared,blob,{feather:8}),controlnet};
   }
   async function renderLiveShape(){
     if(!liveOn) return;
     const ref=asset()?.draft?.reference, prefs=flow.modelPrefs();
     const mode=$('liveMode').value;
     const target=liveParts();
+    if(target) target.preview=!!gesture;
     // 结构渲染只需要部件结构，不必选中部件；局部重绘必须有选中的未锁定部件
     if(mode==='region'&&!target){liveState('局部重绘需要先选中一个未锁定的部件。');return;}
+    if(mode==='region'&&qwenPref(prefs)){liveState('局部重绘请换 SD1.5 模型；Qwen 用于结构渲染。',true);return;}
     if(!parts().length){liveState('还没有部件：先描轮廓或矢量化底图。',true);return;}
     if(mode==='region'&&!ref){liveState('这份草稿没有底图，先回图像编辑出图，再「拆成部件」。',true);return;}
-    if(liveBusy){scheduleLiveShape();return;}
-    liveBusy=true;
-    $('liveToggle').disabled=true;
+    if(liveBusy) return;
+    const revision=liveRevision;
+    livePending=false;
+    liveBusy=true;dragRequest=!!gesture;
+    const started=performance.now();
     liveState(mode==='region'?'正在局部重绘 '+(target.edit.name)+'…':'正在按结构渲染…');
     liveController=new AbortController();
     try{
@@ -866,18 +1097,26 @@
       const {blob,controlnet}=mode==='region'
         ?await renderRegion(prefs,target,size,subject)
         :await renderStructure(prefs,size,subject);
+      if(!liveOn||revision!==liveRevision||liveController.signal.aborted) return;
       if(liveUrl) URL.revokeObjectURL(liveUrl);
       liveUrl=URL.createObjectURL(blob);
-      $('liveImage').src=liveUrl;
+      $('liveImage').src=liveUrl;$('liveImage').hidden=false;
+      // 出图后保留轮廓叠加：这样才能一眼对照「渲染结果 vs 造型」是否一致。
+      // 旧逻辑在这里 replaceChildren() 清空，正是「渲染结果里看不到轮廓线」的第二处根因。
+      drawLiveOutline(parts().map(part=>gesture?.part?.id===part.id?gesture.part:part));
+      if(mode==='region'&&!target.preview&&!gesture&&target.edit.id===selected){
+        liveFrame={blob,revision:size.draft.revision,partId:selected};
+        $('liveAdopt').disabled=false;
+      }
       liveState(mode==='region'
-        ?'已按最新轮廓重绘 '+target.edit.name+(controlnet?'（线稿锁形）':'（提示词兜底）')+'，锁定部件像素未改动。'
-        :'已按当前结构渲染'+(controlnet?'（线稿锁形）':'（提示词兜底）')+'：所有部件轮廓与画布一致，锁定件形态不变。');
+        ?'已按最新轮廓重绘 '+target.edit.name+(controlnet?'（线稿锁形）':'（提示词兜底）')+'，'+(target.preview?'拖动预览':'最终帧')+' '+((performance.now()-started)/1000).toFixed(1)+' 秒。'
+        :'已按当前结构渲染'+(controlnet?'（线稿锁形）':'（提示词兜底）')+'，用时 '+((performance.now()-started)/1000).toFixed(1)+' 秒。');
     }catch(error){
-      if(liveController?.signal.aborted) liveState('已停止。');
+      if(!liveOn||revision!==liveRevision||liveController.signal.aborted) return;
       else liveState('渲染失败：'+error.message,true);
     }finally{
-      liveBusy=false;liveController=undefined;
-      $('liveToggle').disabled=busy;
+      liveBusy=false;dragRequest=false;liveController=undefined;
+      if(liveOn&&livePending) liveTimer=setTimeout(()=>void renderLiveShape(),Math.max(0,liveDue-performance.now()));
     }
   }
   function setLiveShape(on){
@@ -885,26 +1124,63 @@
     $('liveToggle').textContent=on?'关闭实时辅助':'开启实时辅助';
     $('liveToggle').setAttribute('aria-pressed',String(on));
     $('livePane').hidden=!on;
+    liveFrame=null;$('liveAdopt').disabled=true;
     if(on){ liveSeed=crypto.getRandomValues(new Uint32Array(1))[0]; scheduleLiveShape(); }
-    else{ clearTimeout(liveTimer); liveController?.abort(); liveState('等待调整'); }
+    else{ clearTimeout(liveTimer);livePending=false;resetLiveImage();liveState('等待调整'); }
   }
   $('liveToggle').onclick=()=>{
     const prefs=flow.modelPrefs();
     if(!liveOn&&(!prefs.endpoint||!prefs.checkpoint)){show('请先在本机模型设置里连接 ComfyUI。',true);return;}
     setLiveShape(!liveOn);
   };
+  $('liveAdopt').onclick=()=>void task(async()=>{
+    const frame=liveFrame;
+    if(!frame||gesture||selected!==frame.partId) return;
+    const blobId=uid(),childId=uid();
+    doc=await store.change(current=>{
+      const parent=liveAsset(current,frame.revision),draft=parent.draft,time=Date.now();
+      const front=parent.design.views.front;
+      const old=front.renderBase||{parts:draft.parts,revision:draft.revision};
+      const lineage={...model.snapshot(parent),revision:old.revision,parts:structuredClone(old.parts)};
+      const baseParts=old.parts.filter(part=>part.id!==frame.partId);
+      const updated=draft.parts.find(part=>part.id===frame.partId);
+      if(!updated||updated.locked) throw new Error('目标部件已更改，请重绘。');
+      const parts=old.parts.some(p=>p.id===updated.id)?old.parts.map(p=>p.id===updated.id?updated:p):[...baseParts,updated];
+      draft.revision=uid();
+      front.revision=parent.design.revision=draft.revision;
+      if(parent.flow?.stages) stageBook.markStale(parent.flow,'refine');
+      front.renderBase={blobId,parts:structuredClone(parts),revision:draft.revision};
+      parent.updatedAt=time;
+      const child=structuredClone(parent);
+      Object.assign(child,{id:childId,name:updated.name+' · 局部重绘',...childPosition(current,parent,0),createdAt:time,adopted:true,
+        layers:[{id:uid(),kind:'image',name:'采用的局部重绘',blobId,opacity:1,visible:true}]});
+      child.draft.lineage=lineage;
+      current.assets[childId]=child;
+    },[{id:blobId,blob:frame.blob}]);
+    liveFrame=null;$('liveAdopt').disabled=true;
+    comparison=doc.assets[childId].draft.lineage;show('已采用局部重绘并保存版本。');
+  });
   $('liveRetry').onclick=()=>{ $('liveRetry').hidden=true; scheduleLiveShape(); };
   $('liveStrength').addEventListener('input',()=>{ $('liveStrengthValue').textContent=$('liveStrength').value+'%'; });
   $('liveStrength').addEventListener('change',scheduleLiveShape);
-  $('liveMode').addEventListener('change',scheduleLiveShape);
+  function updateLiveControls(){
+    const region=$('liveMode').value==='region';
+    $('liveAdopt').hidden=!region;
+    $('liveTier').closest('label').hidden=region;
+    $('liveStrength').hidden=!region;$('liveStrengthValue').closest('label').hidden=!region;
+    $('liveTier').disabled=region;
+    $('liveStrength').disabled=!region;
+  }
+  updateLiveControls();
+  $('liveTier').addEventListener('change',scheduleLiveShape);
+  $('liveMode').addEventListener('change',()=>{updateLiveControls();resetLiveImage();scheduleLiveShape();});
   $('partPrompt').addEventListener('input',scheduleLiveShape);
 
-  // ── 阶段轨道：微调完成去三视图 / 回草图（P0：前进条件 + 冻结快照）──
+  // ── 阶段轨道：微调完成去产品渲染（三视图在展示区切换）/ 回草图（P0：前进条件 + 冻结快照）──
   const boardQuery='?project='+encodeURIComponent(project?.id||'');
   $('railSketch').href='image-studio.html'+boardQuery+'&asset='+encodeURIComponent(id);
-  $('railOrtho').href='image-studio.html'+boardQuery+'&asset='+encodeURIComponent(id)+'&stage=ortho';
   $('railRender').href='image-studio.html'+boardQuery+'&asset='+encodeURIComponent(id)+'&stage=render';
-  const stepHref={sketch:$('railSketch').href,ortho:$('railOrtho').href,render:$('railRender').href};
+  const stepHref={sketch:$('railSketch').href,render:$('railRender').href};
   async function goStage(event,stage){
     event.preventDefault();
     // 前进条件：离开微调至少要有 1 个部件（违规校验随 P2 约束系统补上）
@@ -928,7 +1204,7 @@
       location.assign(stepHref[stage]);
     }catch(error){ show(error.message,true); }
   }
-  for(const [stage,anchor] of [['sketch',$('railSketch')],['ortho',$('railOrtho')],['render',$('railRender')]]){
+  for(const [stage,anchor] of [['sketch',$('railSketch')],['render',$('railRender')]]){
     anchor.addEventListener('click',event=>void goStage(event,stage));
   }
 
@@ -965,6 +1241,31 @@
         });
         show('部件草稿已迁移到方案结构 design，锁定改存方案级锁定表。');
       }
+      // 草图同步：进入微调后上游草图被改过（refine 过期）时，把底图换成最新画面，
+      // 并作废基于旧底图的渲染基准；部件保持可编辑，形状对不上的可重新描轮廓。
+      if(stageBook.staleOf(asset()?.flow,'refine')){
+        const png=await window.WuyingWorkspaceComposite.toPng(asset(),store).catch(()=>null);
+        if(png){
+          const blobId=uid();
+          doc=await store.change(next=>{
+            const target=next.assets[id];
+            if(!target?.draft) return;
+            target.draft.reference={...target.draft.reference,blobId,assetId:id,label:target.name};
+            if(target.design?.views?.front) delete target.design.views.front.renderBase;
+            target.draft.revision=uid();
+            if(target.design?.views?.front) target.design.views.front.revision=target.design.revision=target.draft.revision;
+            if(target.flow?.stages){
+              stageBook.capture(target.flow,'sketch',{blobId,layersSig:stageBook.layersSig(target.layers)});
+              if(target.flow.stages.refine) target.flow.stages.refine.stale=false;
+            }
+            target.updatedAt=Date.now();
+          },[{id:blobId,blob:png}]);
+          show('草图已修改：底图已同步为最新画面；部件轮廓仍可编辑，形状对不上的可重新描轮廓或矢量化底图。');
+        }else{
+          show('上游草图已修改：旧部件草稿基于修改前的画面，建议重新描轮廓或矢量化底图。');
+        }
+      }
+      $('file1Review').hidden=project.id!=='bc1df03d-50be-4cc0-aecf-c40795477a69'||id!=='1b49c604-4c03-4e4b-a306-394511ae9879';
       $('shapeBack').href=toBoard(id);
       $('shapeImage').href=toImage(id);$('shapeImage').hidden=false;
       $('shapeFlowRail').hidden=false;

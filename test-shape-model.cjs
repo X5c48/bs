@@ -170,3 +170,125 @@ test('updatePart 支持描线部件更新 points 并做合法性校验',()=>{
   // 越界坐标会被 validate 拒绝（轮廓超出画布）
   assert.throws(()=>parts.updatePart([part],'s',{points:[{x:-9,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}]},size),/超出画布/);
 });
+
+test('splitting a curved segment preserves its shape and independent handles survive later edits',()=>{
+  const part=parts.tracePart('panel','面板',[{x:80,y:80},{x:180,y:80},{x:180,y:180},{x:80,y:180}],size);
+  const smooth=parts.editNode(part,0,'out',{x:-.25,y:-.45}).part;
+  assert.deepEqual(smooth.points[0].in,{x:-.75,y:-.55});
+  const asymmetric=parts.editNode(smooth,0,'in',{x:-.52,y:-.35},true).part;
+  assert.deepEqual(asymmetric.points[0].out,smooth.points[0].out);
+  const before=parts.polygon(asymmetric);
+  const split=parts.editNode(asymmetric,0,'insert',.5).part;
+  const after=parts.polygon(split);
+  assert.equal(split.points.length,5);
+  for(const p of before) assert.ok(after.some(q=>Math.hypot(q.x-p.x,q.y-p.y)<.001));
+  assert.equal(parts.editNode(split,1,'delete').part.points.length,4);
+  const locked={...part,id:'locked',locked:true};
+  assert.throws(()=>parts.updatePart([part,locked],part.id,{width:110},size),/共用/);
+  const triangle=parts.editNode(part,0,'delete').part;
+  assert.equal(parts.editNode(triangle,0,'delete').ok,false);
+});
+
+test('局部帧族谱记录节点参数差，父稿保持原值',()=>{
+  const lamp=parts.tracePart('shade','灯罩',[{x:80,y:80},{x:200,y:80},{x:180,y:140},{x:80,y:140}],size);
+  const next=parts.moveNode(lamp,1,{x:.45,y:-.35}).part;
+  const change=parts.diff([lamp],[next]);
+  assert.equal(change.length,1);
+  assert.match(change[0].fields[0].label,/节点 2/);
+  assert.notEqual(change[0].fields[0].before,change[0].fields[0].after);
+  assert.deepEqual(lamp.points[1],{x:.5,y:-.5});
+});
+
+/* ── 细长部件（秒针/指针）：描线、校验与显示保障 ── */
+
+test('细长描线部件（4×80 秒针）可以创建、更新并保持轮廓可见',()=>{
+  const big={width:800,height:600};
+  // 去程 + 回程两条近似平行边（用户沿表针两侧描画的真实笔迹）
+  const stroke=[];
+  const x0=400,y0=100,x1=404,y1=180;
+  for(let i=0;i<=40;i++) stroke.push({x:x0+(x1-x0)*i/40,y:y0+(y1-y0)*i/40});
+  for(let i=40;i>=0;i--) stroke.push({x:x0+3.5+(x1-x0-3.5)*i/40,y:y0+(y1-y0)*i/40});
+  stroke.push({x:x0,y:y0});
+  const part=parts.tracePart('second-hand','秒针',stroke,big);
+  assert.equal(part.shape,'polygon');
+  assert.ok(part.width>=3&&part.height>=80,'细针宽度 ≥3、长度保留：'+part.width+'×'+part.height);
+  const outline=parts.polygon(part);
+  assert.ok(outline.length>=3,'轮廓至少 3 点，SVG polygon 才会渲染');
+  assert.ok(outline.every(({x,y})=>Number.isFinite(x)&&Number.isFinite(y)));
+  // 旋转后轮廓仍闭合可见，且深度投影可用
+  const rotated=parts.updatePart([part],'second-hand',{angle:60},big)[0];
+  assert.equal(parts.polygon(rotated).length,outline.length);
+  assert.ok(parts.blockFaces(rotated,0,0).length>=1,'细针也有可投影的体块面');
+  // 低于 3px 仍然拒绝
+  assert.throws(()=>parts.updatePart([part],'second-hand',{width:2,height:60},big),/至少为 3/);
+});
+
+/* ── 规整化：手绘轮廓吸附标准几何，节点仍可编辑 ── */
+
+const canvas={width:800,height:600};
+function polygonPart(points,name='部件'){
+  return parts.createPart('reg','polygon',name,{x:400,y:300,width:200,height:200,angle:0,depth:24,z:0,points},canvas);
+}
+
+test('规整化·接近圆：识别为圆并吸附，产物仍是可拖节点',()=>{
+  const jitter=Array.from({length:20},(_,i)=>{const t=i/20*Math.PI*2,r=.5+(i%3?0:.035);return{x:r*Math.cos(t),y:r*Math.sin(t)};});
+  const part=polygonPart(jitter,'表盘');
+  const info=parts.describeOutline(part);
+  assert.equal(info.suggestion.target,'circle');
+  assert.ok(info.suggestion.score>.5,'匹配度 '+info.suggestion.score);
+  const result=parts.regularize(part,canvas);
+  assert.equal(result.ok,true);
+  assert.equal(result.target,'circle');
+  assert.equal(result.part.shape,'polygon','规整后必须是 polygon，节点才可拖');
+  assert.equal(result.part.points.length,16);
+  assert.equal(result.part.name,'表盘','名称保留');
+  // 圆：宽高应几乎相等
+  assert.ok(Math.abs(result.part.width-result.part.height)<1);
+});
+
+test('规整化·椭圆与矩形：各按特征吸附',()=>{
+  const ellipse=Array.from({length:24},(_,i)=>{const t=i/24*Math.PI*2;return{x:.5*Math.cos(t),y:.25*Math.sin(t)};});
+  const oval=polygonPart(ellipse);
+  assert.equal(parts.describeOutline(oval).suggestion.target,'ellipse');
+  assert.equal(parts.regularize(oval,canvas).target,'ellipse');
+
+  const box=[{x:-.5,y:-.5},{x:.5,y:-.5},{x:.5,y:.5},{x:-.5,y:.5}];
+  const rect=polygonPart(box);
+  assert.equal(parts.describeOutline(rect).suggestion.target,'rectangle');
+  const result=parts.regularize(rect,canvas);
+  assert.equal(result.part.points.length,4);
+});
+
+test('规整化·自由形不强掰，可手动指定标准形',()=>{
+  const star=Array.from({length:10},(_,i)=>{const t=i/10*Math.PI*2,r=i%2?.22:.5;return{x:r*Math.cos(t),y:r*Math.sin(t)};});
+  const part=polygonPart(star,'星形挂件');
+  const auto=parts.regularize(part,canvas);
+  assert.equal(auto.ok,false);
+  assert.equal(auto.reason,'freeform');
+  assert.match(auto.message,/自由造型/);
+  // 用户仍可显式要求圆角矩形
+  const forced=parts.regularize(part,canvas,{target:'rounded'});
+  assert.equal(forced.ok,true);
+  assert.equal(forced.part.points.length,12,'圆角矩形 12 个可拖节点');
+});
+
+test('规整化·锁定拒绝、越界自动收进画布、角度归零',()=>{
+  const jitter=Array.from({length:20},(_,i)=>{const t=i/20*Math.PI*2;return{x:.5*Math.cos(t),y:.5*Math.sin(t)};});
+  const part=polygonPart(jitter);
+  assert.throws(()=>parts.regularize({...part,locked:true},canvas),/已锁定/);
+  // 旋转 30° 的大部件：规整后角度烘焙进点集
+  const rotated={...part,angle:30,width:700,height:700};
+  const result=parts.regularize(rotated,canvas);
+  assert.equal(result.part.angle,0);
+  const outline=parts.polygon(result.part);
+  assert.ok(outline.every(({x,y})=>x>=-.01&&y>=-.01&&x<=canvas.width+.01&&y<=canvas.height+.01),'轮廓必须回到画布内');
+});
+
+test('规整化·保持可编辑：规整后拖节点仍生效',()=>{
+  const jitter=Array.from({length:20},(_,i)=>{const t=i/20*Math.PI*2,r=.5+(i%2?.02:-.02);return{x:r*Math.cos(t),y:r*Math.sin(t)};});
+  const part=polygonPart(jitter);
+  const tidy=parts.regularize(part,canvas).part;
+  const edited=parts.editNode(tidy,0,'point',{x:tidy.points[0].x*.88,y:tidy.points[0].y*.88});
+  assert.equal(edited.ok,true,'规整后的节点必须能被拖动');
+  assert.notEqual(edited.part.points[0].x,tidy.points[0].x);
+});

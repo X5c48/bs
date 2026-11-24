@@ -6,7 +6,12 @@
   const workspaceAssets=window.WuyingWorkspaceAssets, videoFlow=window.WuyingVideo;
   if(!project){location.replace('files.html');return;}
   const store=window.WuyingWorkspace.open(project.id);
+  if(project.fileType==='review-document'||(new URLSearchParams(location.search).has('process')&&(await store.read()).reviewDocument)){
+    const {openDocument}=await import('./review-document.js');
+    await openDocument(project,store);return;
+  }
   const flow=window.WuyingWorkflow, composite=window.WuyingWorkspaceComposite, variations=window.WuyingVariationControls;
+  const explore=window.WuyingSketchExplore;
   const query='?project='+encodeURIComponent(project.id), svg='http://www.w3.org/2000/svg';
   const names={instant:'快速渲染',render:'提示渲染',modify:'修改',color:'配色推演',form:'造型推演',view:'新视角',cutout:flow.names.cutout,upscale:flow.names.upscale};
   const hints={instant:'选择完成阶段，直接渲染草图',render:'描述材质与光照，渲染草图',modify:'描述要修改的内容和要保留的部分',color:'选目标色或连接配色参考',form:'选择要调整的造型方向',view:'为产品选择目标视角',cutout:'分离主体并保留透明背景',upscale:'等比放大，长边最多 4096 像素'};
@@ -288,6 +293,24 @@
       location.assign(studioLink(id));
     }catch{}
   }
+  // 工作台内直接起稿：不跳页，画完就是一张可探索的草图节点
+  async function quickSketch(){
+    const pad=window.WuyingSketchPad;
+    if(!pad){say('草图画布未加载，请刷新页面。',true);return;}
+    const strokes=await pad.open({width:1024,height:768,title:'快速草图'});
+    if(!strokes||!strokes.length)return;
+    const id=uid(),time=Date.now(),at=vacant(startAt());
+    try{
+      await save(current=>{
+        current.assets[id]={id,name:'草图 '+(Object.keys(current.assets).length+1),...at,
+          width:1024,height:768,createdAt:time,updatedAt:time,
+          layers:[{id:uid(),name:'草图',kind:'ink',strokes,visible:true,opacity:1}]};
+      });
+      await refresh(false);
+      pickAsset(id,false,true);
+      say('草图已加入画布。选中它就能造型发散或造型裂变。');
+    }catch(error){say(error.message||'草图保存失败。',true);}
+  }
   function briefFromLocation(){
     try{
       const raw=new URLSearchParams(location.search).get('brief');
@@ -386,6 +409,7 @@
   };
   $('emptyDraft').onclick=()=>addDraft();
   $('emptySketch').onclick=addSketch;$('emptyImport').onclick=upload;
+  $('emptyPad').onclick=quickSketch;$('quickSketch').onclick=quickSketch;
   $('workbenchUpload').onchange=event=>{importFiles(event.target.files);event.target.value='';};
 
   function blockAt(p){
@@ -584,6 +608,89 @@
     }).catch(error=>say(error.message,true));
   }
 
+  // ── 造型探索：发散走 AI 出图，裂变走矢量几何变换（产物仍可编辑）──
+  let exploring=false;
+  function exploreBlock(asset){
+    const section=el('section',undefined,'wb-explore');
+    section.append(el('strong','造型探索','wb-section'),
+      el('p','发散换风格方向，裂变改结构与比例。产物会铺在右侧，点「标记为采用」定下方向。','wb-panel-copy'));
+    const count=options([['4','4 个方案'],['6','6 个方案']],'4');
+    count.id='exploreCount';count.setAttribute('aria-label','方案数量');
+    const grid=el('div',undefined,'wb-action-grid');
+    const fission=button('造型裂变',()=>runFission(asset,Number(count.value)));
+    const diverge=button('造型发散',()=>runDiverge(asset,Number(count.value)),'wb-primary');
+    fission.id='exploreFission';diverge.id='exploreDiverge';
+    grid.append(fission,diverge);
+    section.append(field('方案数量',count),grid);
+    section.append(el('p',explore.frameOf(asset.layers||[])
+      ? '裂变即时出方案、离线可用；发散需要先在「模型连接」里选好出图模型。'
+      : '这张图还没有笔迹，先画几笔再探索。','wb-panel-copy'));
+    return section;
+  }
+  function variantAsset(source,variant,position,id,time){
+    return {id,name:source.name+' · 裂变 '+variant.label,...position,
+      width:source.width,height:source.height,createdAt:time,updatedAt:time,
+      layers:variant.layers.map(layer=>({...layer,id:uid(),
+        strokes:(layer.strokes||[]).map(stroke=>({...stroke,points:stroke.points.map(point=>({...point}))}))})),
+      variant:{mode:'fission',of:source.id,transform:variant.id,label:variant.label}};
+  }
+  async function runFission(asset,count){
+    if(exploring){say('正在生成方案，先等这一批完成。',true);return;}
+    const variants=explore.fission(asset,{count});
+    if(!variants.length){say('这张图还没有笔迹，先画几笔再裂变。',true);return;}
+    exploring=true;say('正在裂变 '+variants.length+' 个方向…');
+    try{
+      const created=[],base=vacant({x:asset.x+340,y:asset.y});
+      await save(current=>{
+        if(!current.assets[asset.id])throw new Error('源图已被移除。');
+        for(const variant of variants){
+          const id=uid(),position=vacant({x:base.x,y:base.y},created);
+          current.assets[id]=variantAsset(asset,variant,position,id,Date.now());
+          created.push(current.assets[id]);
+        }
+      });
+      await refresh(false);
+      say('裂变出 '+created.length+' 个方案，已铺在右侧。选一个继续画或去微调。');
+      if(created[0])reveal(created[0]);
+    }catch(error){say(error.message,true);}
+    finally{exploring=false;}
+  }
+  async function runDiverge(asset,count){
+    if(exploring){say('正在生成方案，先等这一批完成。',true);return;}
+    const prefs=flow.modelPrefs();
+    if(!prefs.endpoint||!prefs.checkpoint){say('先在「模型连接」里选好出图模型，再造型发散。',true);openModel?.();return;}
+    exploring=true;
+    const controller=new AbortController();
+    try{
+      say('正在合成源图…');
+      const source=await composite.toPng(asset,store);
+      const render=window.WuyingWorkspaceRender;
+      const results=await explore.diverge({asset,source,count,signal:controller.signal,
+        onStatus:message=>say(message),
+        generate:options=>render.generate({...options,...prefs,provider:prefs.provider||'comfy',live:false,
+          slot:'explore-'+asset.id.slice(0,8)})});
+      const blobs=[],planned=[],base=vacant({x:asset.x+340,y:asset.y});
+      for(const result of results){
+        const blobId=uid();blobs.push({id:blobId,blob:result.blob});
+        const id=uid(),position=vacant({x:base.x,y:base.y},planned);
+        planned.push({id,position,result,blobId});
+      }
+      await save(current=>{
+        if(!current.assets[asset.id])throw new Error('源图已被移除。');
+        for(const item of planned){
+          current.assets[item.id]={id:item.id,name:asset.name+' · 发散 '+item.result.label,...item.position,
+            width:asset.width,height:asset.height,createdAt:Date.now(),updatedAt:Date.now(),
+            layers:[{id:uid(),name:'发散结果',kind:'image',blobId:item.blobId,visible:true,opacity:1}],
+            variant:{mode:'diverge',of:asset.id,direction:item.result.id,label:item.result.label,prompt:item.result.prompt}};
+        }
+      },blobs);
+      await refresh(false);
+      say('发散出 '+planned.length+' 个方向，已铺在右侧。');
+      const first=planned[0]&&doc.assets[planned[0].id];
+      if(first)reveal(first);
+    }catch(error){say(error.name==='AbortError'?'已停止发散。':error.message,true);}
+    finally{exploring=false;}
+  }
   function drawAssetInspector(asset){
     if(asset.mediaType==='video'){drawVideoInspector(asset);return;}
     $('inspectorTitle').textContent=selection.size>1?selection.size+' 张图像':asset.name;
@@ -607,8 +714,16 @@
       asset.draft?link('编辑部件与对照版本',shapeLink(asset.id),'wb-button wb-primary'):button('拆成部件',()=>addDraft(asset),'wb-primary'),
       link('进入图像编辑器',studioLink(asset.id),'wb-button'));
     if(asset.draft)body.append(el('p',asset.draft.parts.length+' 个部件 · '+asset.draft.parts.filter(part=>part.locked).length+' 个已锁定','wb-panel-copy'));
-    if(asset.adopted)body.append(button('用此方案生成视频',()=>openVideo(asset),'wb-primary'));
     if(job?.inputBlobId)body.append(button('与生成时的源图对照',()=>compare(asset)));
+    if(asset.variant){
+      const origin=doc.assets[asset.variant.of];
+      body.append(el('p','来自「'+(asset.variant.mode==='fission'?'造型裂变':'造型发散')+'」· '+
+        (asset.variant.mode==='fission'?'变换更接近草图、可继续编辑':'新方向概念图')+
+        (origin?' · 源图 '+origin.name:''),'wb-panel-copy'));
+      if(origin)body.append(button('回到源草图继续探索',()=>pickAsset(origin.id,false,true)));
+    }else{
+      body.append(exploreBlock(asset));
+    }
     if(asset.external){
       const name=workspaceAssets.toolNames[asset.external.tool]||'扩展工具';
       const origin=asset.external.sourceName?' · 源图 '+asset.external.sourceName:'';
@@ -932,7 +1047,7 @@
       $('videoStatus').textContent=controller.signal.aborted?'已停止查询，可以稍后继续。':error.message;
     }finally{videoRun=null;syncVideo();videoHistory();}
   }
-  $('openVideo').onclick=()=>openVideo(activeAsset());
+  $('openVideo')?.addEventListener('click',()=>openVideo(activeAsset()));
   $('closeVideo').onclick=()=>videoDialog.close();
   $('videoStop').onclick=()=>videoRun?.abort();
   for(const select of [videoProvider,videoMode,videoFirst,videoLast])select.onchange=syncVideo;
@@ -1033,6 +1148,10 @@
 
   async function initialize(){
     applyCamera();await refresh();fit();
+    if(doc.reviewDocument){
+      const link=document.createElement('a');link.className='wb-button';link.textContent='查看处理流程';
+      link.href='workbench.html'+query+'&process=1';$('studioMode').before(link);
+    }
     const id=new URLSearchParams(location.search).get('asset');
     if(doc.assets[id])pickAsset(id,false,true);
   }

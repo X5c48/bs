@@ -100,23 +100,27 @@ async function main() {
         return window.WuyingFlowStages.layersSig(doc.assets[assetId].layers);
       }, { projectId: ids.projectId, assetId: ids.assetId }));
 
-    console.log('== refine → ortho：前进条件 + 结构修订号快照');
-    await page.locator('#railOrtho').click();
+    console.log('== refine → 产品渲染：前进条件 + 结构修订号快照');
+    await page.locator('#railRender').click();
     await sleep(500);
-    check('空草稿不能去三视图（留在微调页）', page.url().includes('shape-studio.html'));
+    check('空草稿不能去产品渲染（留在微调页）', page.url().includes('shape-studio.html'));
     const gateMsg = await page.locator('#shapeStatus').textContent();
     check('前进条件报原因', gateMsg.includes('还没有部件'), gateMsg.trim());
     await page.locator('#addRectangle').click();
     await sleep(400);
-    await page.locator('#railOrtho').click();
-    await page.waitForURL(/stage=ortho/, { timeout: 15000 });
+    await page.locator('#railRender').click();
+    await page.waitForURL(/stage=render/, { timeout: 15000 });
     await page.waitForSelector('#studioFlowRail:not([hidden])', { timeout: 20000 });
     await sleep(500);
     state = await readFlow(page, ids);
-    check('进入三视图后 stage=ortho', state.flow.stage === 'ortho', state.flow.stage);
+    check('进入产品渲染后 stage=render', state.flow.stage === 'render', state.flow.stage);
     check('refine 快照冻结了结构修订号', state.flow.stages?.refine?.snapshot?.revision === state.revision,
       state.flow.stages?.refine?.snapshot?.revision + ' vs ' + state.revision);
     check('refine 条目无过期标记', !state.flow.stages?.refine?.stale);
+    await page.locator('[data-view-mode="ortho"]').click();
+    await sleep(500);
+    state = await readFlow(page, ids);
+    check('三视图作为产品展示模式，stage=ortho', state.flow.stage === 'ortho', state.flow.stage);
 
     console.log('== ortho → render：渲染条目快照');
     await page.locator('#studioFlowRail [data-stage="render"]').click();
@@ -134,15 +138,15 @@ async function main() {
       buffer: Buffer.from(ids.extraPng.split(',')[1], 'base64') });
     await sleep(1200);
     const staleList = await staleSteps(page);
-    check('草图改动后 refine/ortho 出现橙点（未到过的 render 不标）',
-      JSON.stringify(staleList) === JSON.stringify(['refine', 'ortho']), staleList.join(','));
+    check('草图改动后 refine 与产品渲染（含三视图）出现橙点',
+      JSON.stringify(staleList) === JSON.stringify(['refine', 'render']), staleList.join(','));
     state = await readFlow(page, ids);
     check('过期标记落库（refine/ortho.stale）',
       state.flow.stages?.refine?.stale === true && state.flow.stages?.ortho?.stale === true);
     check('sketch 快照未被覆盖（仍是冻结的那份）', !!state.flow.stages?.sketch?.snapshot?.blobId);
 
     console.log('== 带过期标记进入三视图：提示上游已改');
-    await page.locator('#studioFlowRail [data-stage="ortho"]').click();
+    await page.locator('[data-view-mode="ortho"]').click();
     await sleep(700);
     const staleMsg = await page.locator('#studioRunStatus').textContent();
     check('进入过期阶段出现提示', staleMsg.includes('上游已修改'), staleMsg.trim());
@@ -164,7 +168,8 @@ async function main() {
     await page.goto(origin + '/image-studio.html?project=' + ids.projectId + '&asset=' + ids.assetId + '&stage=ortho');
     await page.waitForSelector('#studioFlowRail:not([hidden])', { timeout: 20000 });
     await sleep(500);
-    check('刷新后阶段保持 ortho', await page.locator('#studioFlowRail [data-stage="ortho"].is-active').count() === 1);
+    check('刷新后阶段保持 ortho', await page.locator('[data-view-mode="ortho"][aria-pressed="true"]').count() === 1
+      && await page.locator('#studioFlowRail [data-stage="render"].is-active').count() === 1);
     check('无 JS 错误', errors.length === 0, errors.join(' | ').slice(0, 200));
   } finally {
     if (ids) {

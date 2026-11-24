@@ -11,10 +11,12 @@
   <script defer src="workspace-store.js"></script><script src="workspace-account.js" defer></script>
   <script defer src="comfy.js"></script>
   <script defer src="image-selection.js"></script>
+  <script defer src="sketch-rules.js"></script>
   <script defer src="shape-model.js"></script>
   <script defer src="workspace-composite.js"></script>
   <script defer src="platform-api.js"></script>
   <script defer src="workspace-render.js"></script>
+  <script defer src="scene-board.js"></script>
   <script defer src="workspace-workflow.js"></script>
   <script defer src="workspace-variation.js"></script>
   <script defer src="inflate-mesh.js"></script>
@@ -22,6 +24,7 @@
   <script defer src="view3d.js"></script>
   <script defer src="flow-stages.js"></script>
   <script defer src="design-model.js"></script>
+  <script defer src="sketch-explore.js"></script><script defer src="sketch-module.js"></script>
   <script defer src="image-studio.js"></script>
 </head>
 <body>
@@ -50,20 +53,16 @@
     </div>
     <div class="header-actions">
       <span id="studioSaved" class="saved-status" role="status">载入中</span>
-      <button id="studioOpen3d" type="button" class="button" title="把当前画面（正在预览的候选或画布合成）生成体块，自由旋转查看">3D 查看</button>
       <button id="studioExport" type="button" class="button"><svg><use href="#i-download"/></svg>导出 PNG</button>
     </div>
   </header>
 
   <nav class="flow-rail" id="studioFlowRail" aria-label="造型流程阶段" hidden>
-    <span class="flow-step" data-stage="sketch"><b>草图造型</b><small>画造型 · 实时辅助</small></span>
+    <button type="button" class="flow-step" data-stage="sketch"><b>草图造型</b><small>画造型 · 设定方向</small></button>
     <span class="flow-arrow" aria-hidden="true">→</span>
-    <button type="button" class="flow-step" data-stage="refine" title="把当前画面转为可编辑部件，锁定不动部分，只调整要改的部件"><b>精细微调</b><small>节点线条 · 锁定</small></span>
+    <button type="button" class="flow-step" data-stage="refine" title="把当前画面转为可编辑部件，锁定不动部分，只调整要改的部件"><b>精细微调</b><small>节点线条 · 锁定</small></button>
     <span class="flow-arrow" aria-hidden="true">→</span>
-    <button type="button" class="flow-step" data-stage="ortho" title="按当前造型生成正视 / 侧视 / 俯视三视图"><b>三视图</b><small>正视 · 侧视 · 俯视</small></span>
-    <span class="flow-arrow" aria-hidden="true">→</span>
-    <button type="button" class="flow-step" data-stage="render" title="用角度球控制水平旋转与俯仰，快速渲染效果图"><b>产品渲染</b><small>角度球 · 快速出图</small></span>
-    <button type="button" class="flow-brief" id="studioFlowBrief" aria-haspopup="dialog" title="产品方向"></button>
+    <button type="button" class="flow-step" data-stage="render" title="三视图与自由视角共用产品展示区"><b>产品渲染</b><small>三视图 · 自由视角</small></button>
   </nav>
   <div class="flow-pop" id="studioFlowBriefPop" hidden>
     <label for="flowBriefCategory">产品类别</label>
@@ -113,7 +112,8 @@
         </div>
         <div class="tool-group" id="strokeSettings">
           <input type="color" id="studioColor" aria-label="画笔颜色" value="#24242b">
-          <label for="studioSize">笔宽</label><input type="range" id="studioSize" aria-label="笔宽" min="1" max="96" value="5"><output id="studioSizeValue">5 px</output>
+          <label for="studioSize" id="studioSizeField">画笔大小 <input type="range" id="studioSize" aria-label="画笔大小" min="1" max="96" value="5"><output id="studioSizeValue">5 px</output></label>
+          <label for="studioEraseSize" id="studioEraseField">橡皮擦大小 <input type="range" id="studioEraseSize" aria-label="橡皮大小" min="8" max="140" value="32"><output id="studioEraseSizeValue">32 px</output></label>
         </div>
         <button type="button" class="button" id="studioLive" aria-pressed="false">实时辅助</button>
         <button type="button" class="button clear-selection" id="studioClearSelection" hidden>取消选区</button>
@@ -131,9 +131,23 @@
           <img class="live-blend" id="studioLiveBlend" alt="" hidden>
           <canvas id="studioOverlay" tabindex="0" aria-label="使用画笔绘画或绘制选区"></canvas>
         </div>
-        <figure class="live-pane" id="studioLivePane" hidden>
-          <div class="live-frame" id="studioLiveFrame"><img id="studioLiveImage" alt="实时渲染结果"><span class="live-empty" id="studioLiveEmpty">开始绘画，渲染会跟着笔触更新</span></div>
+        <!-- 场景板（P8）：产品先按像素摆进场景，出图只负责打光和重画环境 -->
+        <div class="scene-board" id="studioSceneBoard" hidden aria-label="场景板">
+          <canvas id="sceneBackdrop" aria-label="场景背景"></canvas>
+          <div class="scene-layer" id="sceneLayer"></div>
+          <p class="scene-empty" id="sceneEmpty">场景板还没有产品<button type="button" class="button" id="sceneUseMold">放入白模</button></p>
+          <p class="scene-tip" id="sceneTip">拖动产品摆放 · 滚轮缩放</p>
+          <figure class="scene-preview" id="scenePreview" hidden>
+            <img id="scenePreviewImage" alt="场景出图结果">
+            <figcaption>
+              <span id="scenePreviewState">场景出图</span>
+              <button type="button" class="button primary" id="sceneAdopt">采用为图层</button>
+            </figcaption>
+          </figure>
+        </div>
+        <figure class="live-pane" id="studioLivePane" hidden>          <div class="live-frame" id="studioLiveFrame"><img id="studioLiveImage" alt="实时渲染结果"><img id="studioSamplingImage" alt="采样中预览" hidden><span class="live-empty" id="studioLiveEmpty">开始绘画，渲染会跟着笔触更新</span></div>
           <figcaption><span class="live-dot" id="studioLiveDot" data-state="idle"></span><span id="studioLiveState">等待笔触</span><span class="live-size" id="studioLiveSize"></span><span class="live-time" id="studioLiveTime"></span><button type="button" class="button live-retry" id="studioLiveRetry" hidden>重试</button></figcaption>
+          <div class="live-candidates" id="studioLiveCandidates" hidden aria-label="造型候选"></div>
           <div class="live-history" id="studioLiveHistory" hidden aria-label="最近的历史帧"></div>
         </figure>
         <div class="live-bar" id="studioLiveBar" hidden>
@@ -142,7 +156,13 @@
             <button type="button" class="button" data-live-view="blend" aria-pressed="false">叠加</button>
           </div>
           <label class="live-range" id="studioLiveBlendField" hidden>叠加 <input type="range" id="studioLiveOpacity" min="0" max="100" value="70" aria-label="叠加不透明度"></label>
-          <label class="live-range">AI 强度 <input type="range" id="studioLiveStrength" min="20" max="95" value="60" aria-label="AI 强度"><output id="studioLiveStrengthValue">60%</output></label>
+          <div class="segmented" role="group" aria-label="探索幅度" id="studioExploreTier" hidden>
+            <button type="button" class="button" data-explore-tier="tight" aria-pressed="false" title="只看体积：锁死线条，只补明暗，形不变">贴线</button>
+            <button type="button" class="button" data-explore-tier="balanced" aria-pressed="true" title="允许修顺线条、补结构，比例基本不动">推敲</button>
+            <button type="button" class="button" data-explore-tier="loose" aria-pressed="false" title="允许改比例和局部形态，用来找别的走法">发散</button>
+          </div>
+          <button type="button" class="button" id="studioTendency" aria-expanded="false" hidden title="给这一轮探索一个形态倾向：繁简 / 曲直 / 厚薄">造型倾向</button>
+          <label class="live-range" id="studioLiveStrengthField">AI 强度 <input type="range" id="studioLiveStrength" min="20" max="95" value="60" aria-label="AI 强度"><output id="studioLiveStrengthValue">60%</output></label>
           <div class="segmented" role="group" aria-label="画质档">
             <button type="button" class="button" data-live-tier="speed" aria-pressed="false" title="最快出帧，分辨率与步数最低">速度</button>
             <button type="button" class="button" data-live-tier="balanced" aria-pressed="true" title="默认档，速度与细节均衡">均衡</button>
@@ -154,7 +174,16 @@
           <button type="button" class="button" id="studioLiveHD" disabled title="沿用当前草图、提示词、主题与种子，重渲一帧 1280×1024 高清图">高清增强</button>
           <button type="button" class="button" id="studioLiveTheme" aria-expanded="false" title="给这张方案设置主题，实时渲染会跟着主题走">主题</button>
           <button type="button" class="button" id="studioLive3d" disabled title="用当前实时帧生成体块，自由旋转查看">3D</button>
+          <button type="button" class="button" id="studioLiveTrace" disabled title="把当前帧作为半透明底图放回画布，在上面描下一稿">描回画布</button>
           <button type="button" class="button primary" id="studioLiveApply" disabled>采用为图层</button>
+        </div>
+        <div class="theme-pop tendency-pop" id="studioTendencyPop" hidden>
+          <div class="theme-pop-head"><strong>造型倾向</strong><span>单选，再点一次取消；只改体积与轮廓气质</span></div>
+          <div id="studioTendencyGroups"></div>
+          <div class="theme-pop-actions">
+            <button type="button" class="button" id="studioTendencyClear">全部不限</button>
+            <button type="button" class="button primary" id="studioTendencyDone">完成</button>
+          </div>
         </div>
         <div class="theme-pop" id="studioThemePop" hidden>
           <div class="theme-pop-head"><strong>方案主题</strong><span>只作用于这张图的实时渲染</span></div>
@@ -174,28 +203,175 @@
     </section>
 
     <aside class="operations pane" aria-labelledby="operationHeading">
-      <header class="pane-header"><h2 id="operationHeading">生成</h2><button type="button" class="button subtle" id="studioModelSettings">模型设置</button></header>
-      <form id="studioOperation">
-        <label for="studioKind">操作</label>
-        <select id="studioKind">
-          <option value="instant">快速渲染</option>
-          <option value="render">提示渲染</option>
-          <option value="explore">方案发散</option>
-          <option value="scene">情境渲染</option>
-          <option value="studio">高品质呈现</option>
-          <option value="modify">修改图像</option>
-          <option value="color">配色变化</option>
-          <option value="form">造型变化</option>
-          <option value="view">生成视角</option>
-          <option value="cutout">去除背景</option>
-          <option value="outpaint">扩展画布</option>
-          <option value="upscale">放大 2×</option>
-        </select>
-        <div class="theme-brief">
-          <label for="studioThemeBrief">主题描述</label>
-          <textarea id="studioThemeBrief" rows="2" maxlength="300" placeholder="例如：北欧极简家居，暖白哑光，柔和自然光"></textarea>
-          <p class="run-hint">输入风格 / 材质 / 配色 / 灯光方向，实时辅助与渲染会跟随；产品结构始终锁定。</p>
+      <header class="pane-header"><h2 id="operationHeading">产品</h2><button type="button" class="button subtle" id="studioModelSettings">模型设置</button></header>
+
+      <section class="inspector-group" id="angleGroup" aria-labelledby="angleHeading">
+        <header class="group-head">
+          <div><h2 id="angleHeading">3D 展示角度</h2><p>拖球定机位，白模与精细图共用同一个角度</p></div>
+        </header>
+        <div id="studioAngleBox" class="stage-quick">
+          <div id="studioAngleSphere"></div>
+          <p class="run-hint" id="studioAngleLabel" role="status"></p>
+          <label class="live-range"><input type="checkbox" id="studioAngleAuto">松手后生成白模</label>
+          <button type="button" class="button" id="studioAngleGenerate">按此视角生成白模</button>
         </div>
+      </section>
+
+      <section class="inspector-group" id="renderFlow" aria-labelledby="flowStepHeading">
+        <header class="group-head">
+          <div><h2 id="flowStepHeading">用户描述与渲染</h2><p>先白模确认材质与视角，确认后再出精细图</p></div>
+        </header>
+        <label for="finalPrompt" class="field-block">精细渲染描述
+          <textarea id="finalPrompt" rows="3" maxlength="600" placeholder="例如：哑光白陶瓷机身，拉丝铝环，柔和影棚光"></textarea>
+        </label>
+        <ol class="render-steps">
+          <li id="stepMold" data-state="ready">
+            <div><b>① 白模</b><small>确认造型、材质倾向与视角，不掺风格</small></div>
+            <button type="button" class="button" id="runMold">生成白模</button>
+          </li>
+          <li id="stepFinal" data-state="locked">
+            <div><b>② 精细渲染</b><small>以白模定机位，自动参考正视、左视与俯视图</small></div>
+            <button type="button" class="button primary" id="runFinal" disabled>精细渲染</button>
+          </li>
+        </ol>
+        <figure id="moldPreview" hidden>
+          <img id="moldImage" alt="白模确认图">
+          <label for="moldMaterial">确认材质倾向<input id="moldMaterial" maxlength="120" placeholder="例如：哑光铝合金"></label>
+          <figcaption><span id="moldMeta">白模已确认</span><button type="button" class="button primary" id="moldConfirm">确认白模与机位</button><button type="button" class="button subtle" id="moldReset">重做白模</button></figcaption>
+        </figure>
+        <p class="run-status" id="flowStatus" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="inspector-group" id="directionGroup" aria-labelledby="directionHeading">
+        <header class="group-head">
+          <div><h2 id="directionHeading">产品方向</h2><p>先定是什么产品、往哪个方向做</p></div>
+        </header>
+        <button type="button" class="flow-brief direction-trigger" id="studioFlowBrief" aria-haspopup="dialog" title="设置产品类别与方向">设置产品方向</button>
+        <div class="theme-brief">
+          <label for="studioThemeBrief">主题描述 <span>风格 / 材质 / 配色 / 灯光</span></label>
+          <textarea id="studioThemeBrief" rows="2" maxlength="300" placeholder="例如：北欧极简家居，暖白哑光，柔和自然光"></textarea>
+          <p class="run-hint">产品结构始终锁定；这里只改风格、材质、配色、灯光与场景。</p>
+        </div>
+        <div id="sketchQuick" class="stage-quick" hidden>
+          <button type="button" class="button primary" id="studioToLineart" title="按「整理线稿」出一张干净线稿，并自动加为新图层">一键转线稿</button>
+          <p class="run-hint">造型画得差不多后，先转线稿再进「精细微调」。</p>
+        </div>
+      </section>
+
+      <section class="inspector-group showcase" aria-labelledby="showcaseHeading">
+        <header class="group-head">
+          <div><h2 id="showcaseHeading">产品展示</h2><p>三视图、自由视角和结果放在同一处</p></div>
+          <button id="studioOpen3d" type="button" class="button subtle" title="把当前画面（正在预览的候选或画布合成）生成体块，自由旋转查看">3D 体块</button>
+        </header>
+        <div class="view-mode" role="group" aria-label="展示方式">
+          <button type="button" class="button" data-view-mode="ortho" aria-pressed="false">三视图</button>
+          <button type="button" class="button" data-view-mode="free" aria-pressed="true">自由视角</button>
+        </div>
+        <div id="orthoQuick" class="stage-quick" hidden>
+          <p class="run-hint"><strong>正视 / 左视 / 俯视</strong>共用比例。有部件时，正视沿用确认轮廓，左视和俯视按部件厚度投影。</p>
+          <button type="button" class="button" id="studioOrthoGenerate">生成三视图</button>
+          <span id="orthoStatus" role="status"></span>
+        </div>
+        <section class="result-pane" aria-labelledby="resultsHeading">
+          <header class="pane-header"><h2 id="resultsHeading">展示结果 <span id="studioResultCount">0</span></h2></header>
+          <div id="studioResults"></div>
+          <div id="studioCandidateActions" hidden>
+            <button type="button" class="button primary" id="studioApplyResult">添加到图层</button>
+            <button type="button" class="button" id="studioPromoteResult" title="作为独立图卡放到工作台，可从它接下一轮">放到工作台</button>
+            <button type="button" class="button" id="studioRestoreRun">恢复设置</button>
+            <button type="button" class="button" id="studioRerun" title="读取这一批保存的输入快照和选区，用新种子再生成">按原输入重跑</button>
+            <button type="button" class="button" id="studioDeleteOutput">从展示结果删除</button>
+            <button type="button" class="button" id="studioShowInput" aria-pressed="false">查看源图</button>
+            <button type="button" class="button" id="studioCandidate3d" title="用这张候选生成体块，自由旋转查看">3D 查看</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="inspector-group" id="conceptPanel" hidden>
+        <details class="more-drawer" id="conceptMore">
+          <summary>更多：概念方向探索 · 发散 / 裂变</summary>
+          <div class="more-body">
+            <label>方案数量 <select><option value="2">2 个方向</option><option value="4">4 个方向</option></select></label>
+            <div class="stage-quick">
+              <button class="button primary" data-concept="diverge">造型发散</button>
+              <button class="button" data-concept="fission">造型裂变</button>
+            </div>
+            <p class="run-hint" role="status">发散生成不同设计方向，裂变调整手绘轮廓与比例。</p>
+            <nav aria-label="探索方案"></nav>
+          </div>
+        </details>
+      </section>
+
+      <section class="inspector-group" id="sceneGroup" hidden aria-labelledby="sceneHeading">
+        <header class="group-head">
+          <div><h2 id="sceneHeading">场景板 · 实物渲染</h2><p>二级工具：把产品放进真实环境，边摆边出图</p></div>
+          <button type="button" class="button" id="sceneToggle" aria-pressed="false">打开场景板</button>
+        </header>
+        <details class="more-drawer" id="sceneMore">
+          <summary>场景、光照与材质设置</summary>
+          <div class="more-body">
+            <div class="scene-row">
+              <span class="scene-label">场景</span>
+              <div class="scene-chips" id="scenePresets" role="group" aria-label="示例场景"></div>
+            </div>
+            <div class="scene-row">
+              <span class="scene-label">光照</span>
+              <div class="scene-chips" id="sceneLightings" role="group" aria-label="光照预设"></div>
+            </div>
+            <div class="scene-row">
+              <span class="scene-label">材质</span>
+              <div class="scene-chips" id="sceneMaterials" role="group" aria-label="材质标签"></div>
+            </div>
+            <div class="scene-row">
+              <span class="scene-label">背景</span>
+              <input type="color" id="sceneBackdropInput" value="#f0eeea" aria-label="背景色">
+              <button type="button" class="button subtle" id="sceneAddBlock">加一块地面</button>
+              <button type="button" class="button subtle" id="sceneUseMoldInPanel">用白模放入</button>
+            </div>
+            <label for="scenePrompt" class="field-block">环境描述
+              <textarea id="scenePrompt" rows="2" maxlength="300" placeholder="例如：户外草地，黄昏侧光，远处有树影"></textarea>
+            </label>
+            <div class="scene-actions">
+              <label class="live-toggle"><input type="checkbox" id="sceneLive" checked> 边摆边出图</label>
+              <button type="button" class="button subtle" id="sceneSeed">换种子</button>
+              <button type="button" class="button primary" id="sceneShot">场景出图</button>
+            </div>
+            <p class="run-status" id="sceneStatus" role="status" aria-live="polite"></p>
+          </div>
+        </details>
+      </section>
+
+      <details class="more-drawer inspector-more" id="studioMoreTools">
+        <summary id="studioMoreSummary">更多工具</summary>
+      <section class="inspector-group" aria-labelledby="generateHeading">
+        <header class="group-head">
+          <div><h2 id="generateHeading">生成与改图</h2><p>选操作、补输入、决定强度</p></div>
+        </header>
+      <form id="studioOperation">
+        <div class="field-block">
+          <label for="studioKind">操作</label>
+          <select id="studioKind">
+            <optgroup label="造型生成">
+              <option value="instant">快速渲染</option>
+              <option value="render">提示渲染</option>
+              <option value="explore">方案发散</option>
+              <option value="scene">情境渲染</option>
+              <option value="studio">高品质呈现</option>
+            </optgroup>
+            <optgroup label="局部改图">
+              <option value="modify">修改图像</option>
+              <option value="color">配色变化</option>
+              <option value="form">造型变化</option>
+              <option value="cutout">去除背景</option>
+              <option value="outpaint">扩展画布</option>
+              <option value="upscale">放大 2×</option>
+            </optgroup>
+            <optgroup label="视角与展示">
+              <option value="view">生成视角</option>
+            </optgroup>
+          </select>
+        </div>
+        <h3 class="field-title">本次输入</h3>
         <div id="studioSceneFields" class="scene-fields" hidden>
           <button type="button" class="button" id="studioScenePhoto">上传场景照片</button>
           <input type="file" id="studioSceneFile" accept="image/png,image/jpeg,image/webp" hidden>
@@ -233,23 +409,11 @@
           <select id="studioMaterial"></select>
         </fieldset>
         <div id="studioVariation" hidden></div>
-        <div id="sketchQuick" class="stage-quick" hidden>
-          <button type="button" class="button" id="studioToLineart" title="按「整理线稿」出一张干净线稿，并自动加为新图层">一键转线稿</button>
-          <p class="run-hint">造型画得差不多后，先转线稿再进「精细微调」。</p>
-        </div>
-        <div id="orthoQuick" class="stage-quick" hidden>
-          <p class="run-hint">已按标准三视图预选 <strong>正视 / 侧视 / 俯视</strong>，点下方「渲染」一次生成三张；也可以增删角度。</p>
-        </div>
-        <div id="studioAngleBox" class="stage-quick" hidden>
-          <div id="studioAngleSphere"></div>
-          <p class="run-hint" id="studioAngleLabel" role="status"></p>
-          <label class="live-range"><input type="checkbox" id="studioAngleAuto" checked>松手后自动渲染</label>
-          <button type="button" class="button" id="studioAngleGenerate">按此视角生成</button>
-        </div>
         <div id="studioPromptField" hidden>
           <label for="studioPrompt">描述想要的结果</label>
           <textarea id="studioPrompt" rows="4" maxlength="1200" placeholder="例如：拉丝铝外壳，保留原有轮廓"></textarea>
         </div>
+        <h3 class="field-title">输出</h3>
         <div class="operation-split">
           <label for="studioStrength" id="studioStrengthField"><span id="studioStrengthLabel">改动强度</span> <output id="studioStrengthValue">55%</output><input type="range" min="25" max="95" value="55" id="studioStrength"></label>
           <label for="studioQuantity">数量<select id="studioQuantity"><option value="1">1 张</option><option value="2">2 张</option><option value="4">4 张</option><option value="8" hidden disabled>8 张</option><option value="16" hidden disabled>16 张</option></select></label>
@@ -262,18 +426,8 @@
         <p id="studioRunStatus" class="run-status" role="status" aria-live="polite"></p>
         <button type="button" id="studioRetryRun" class="button retry-run" hidden>重试</button>
       </form>
-      <section class="result-pane" aria-labelledby="resultsHeading">
-        <header class="pane-header"><h2 id="resultsHeading">结果 <span id="studioResultCount">0</span></h2></header>
-        <div id="studioResults"></div>
-        <div id="studioCandidateActions" hidden>
-          <button type="button" class="button primary" id="studioApplyResult">添加到图层</button>
-          <button type="button" class="button" id="studioPromoteResult" title="作为独立图卡放到工作台，可从它接下一轮">放到工作台</button>
-          <button type="button" class="button" id="studioRestoreRun">恢复设置</button>
-          <button type="button" class="button" id="studioRerun" title="读取这一批保存的输入快照和选区，用新种子再生成">按原输入重跑</button>
-          <button type="button" class="button" id="studioShowInput" aria-pressed="false">查看源图</button>
-          <button type="button" class="button" id="studioCandidate3d" title="用这张候选生成体块，自由旋转查看">3D 查看</button>
-        </div>
       </section>
+      </details>
     </aside>
   </main>
 

@@ -86,10 +86,7 @@
     return {x:minX,y:minY,width:Math.max(...xs)-minX,height:Math.max(...ys)-minY};
   }
 
-  // 网格 → 部件候选：连通域 → 轮廓 → 简化 → 面积过滤，按面积从大到小
-  function detectParts(grid,width,height,{minPixels=24,minArea=200,maxParts=8,tolerance=2}={}){
-    const found=[];
-    for(const comp of components(grid,width,height,minPixels)){
+  function contour(comp,width,height,tolerance,minArea){
       const member=new Set(comp.pixels);
       // 起点：外接框内最上一行、最左的像素
       let start=-1;
@@ -98,20 +95,51 @@
           if(member.has(y*width+x)){ start=y*width+x; break; }
         }
       }
-      if(start<0) continue;
+      if(start<0) return null;
       const raw=traceBoundary(member,width,height,start);
-      if(raw.length<6) continue;
+      if(raw.length<6) return null;
       // 追踪会带回起点作为闭合点：去掉首尾重复与相邻重复，否则 inspect 会判退化
       const same=(a,b)=>Math.abs(a.x-b.x)<1e-6&&Math.abs(a.y-b.y)<1e-6;
       let points=rules.simplifyStroke(raw,tolerance*tolerance)
         .filter((point,index,list)=>index===0||!same(point,list[index-1]));
       if(points.length>1&&same(points[0],points.at(-1))) points.pop();
-      if(points.length<3||points.length>90) continue;
+      if(points.length<3||points.length>90) return null;
       const measured=area(points);
-      if(measured<minArea) continue;
+      if(measured<minArea) return null;
       const box=bounds(points);
-      if(box.width<6||box.height<6) continue;
-      found.push({points,area:measured,bounds:box,pixels:comp.pixels.length});
+      if(box.width<6||box.height<6) return null;
+      return {points,area:measured,bounds:box,pixels:comp.pixels.length};
+  }
+
+  // 对相接的手绘轮廓，在局部网格内扩张一像素，隔离细小断口；只追踪不通向边缘的空白区。
+  function enclosedParts(comp,imageWidth,tolerance,minArea){
+    const width=comp.maxX-comp.minX+5,height=comp.maxY-comp.minY+5;
+    const open=new Uint8Array(width*height).fill(1);
+    for(const index of comp.pixels){
+      const x=index%imageWidth-comp.minX+2,y=Math.floor(index/imageWidth)-comp.minY+2;
+      for(let dy=-1;dy<=1;dy++) open.fill(0,(y+dy)*width+x-1,(y+dy)*width+x+2);
+    }
+    const result=[];
+    for(const region of components(open,width,height,Math.max(1,Math.floor(minArea)))){
+      if(region.minX===0||region.minY===0||region.maxX===width-1||region.maxY===height-1) continue;
+      const outline=contour(region,width,height,tolerance,minArea);
+      if(!outline) continue;
+      for(const p of outline.points){p.x+=comp.minX-2;p.y+=comp.minY-2;}
+      outline.bounds=bounds(outline.points);
+      result.push(outline);
+    }
+    return result;
+  }
+
+  // 网格 → 部件候选：连通域 → 轮廓 → 简化 → 面积过滤，按面积从大到小
+  function detectParts(grid,width,height,{minPixels=24,minArea=200,maxParts=8,tolerance=2}={}){
+    const found=[];
+    for(const comp of components(grid,width,height,minPixels)){
+      const outer=contour(comp,width,height,tolerance,minArea);
+      const boxArea=(comp.maxX-comp.minX+1)*(comp.maxY-comp.minY+1);
+      const inner=comp.pixels.length<boxArea*.5?enclosedParts(comp,width,tolerance,minArea):[];
+      if(inner.length>1||!outer) found.push(...inner);
+      else found.push(outer);
     }
     return found.sort((a,b)=>b.area-a.area).slice(0,maxParts);
   }

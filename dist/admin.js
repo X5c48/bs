@@ -128,7 +128,7 @@
   $('addApilio').onclick=()=>{
     fillProfile({name:'apilio.ai',baseUrl:'https://apilio.ai/v1',model:'gpt-image-1',edit:true,imageField:'image',size:''});
     $('apiTitle').textContent='添加 apilio.ai 接口';
-    status('apiStatus','已预填 apilio.ai。请粘贴你的 sk，点「保存接口」；模型可在上方改为模型广场中的其他图片模型。');
+    status('apiStatus','已预填 apilio.ai。请粘贴在「API Token」页创建的 sk，点「保存接口」；模型可在上方改为模型广场里的图片模型。连不上时地址可换 https://api.apilio.ai/v1 或 https://apicn.apilio.ai/v1。');
     $('apiKey').focus();
   };
   profileForm.oninput=event=>{
@@ -154,8 +154,8 @@
     });
   };
   $('testApi').onclick=()=>void imageTask('正在测试接口…',async()=>{
-    await api.request('image-profiles/test',{id:selected.id});
-    status('apiStatus','连接成功。');
+    const result=await api.request('image-profiles/test',{id:selected.id});
+    status('apiStatus',result?.message||'连接成功。',result?.modelMissing===true);
   });
   $('useApi').onclick=()=>{
     if(!selected?.ready||!selected.edit||dirty) return;

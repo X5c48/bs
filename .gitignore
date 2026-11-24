@@ -7,3 +7,6 @@ verify-workbench.cjs
 /workbench-mobile.png
 .wuying-local/
 .openai/
+# 开发过程临时截图/探针图，只留本地不进仓库
+/tools/*.png
+/tools/shots/

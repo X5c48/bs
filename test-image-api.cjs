@@ -143,3 +143,49 @@ test('apilio.ai preset uses OpenAI image field, accepts address and survives res
   assert.doesNotMatch(seen.at(-1).body,/name="image\[\]"/);
   assert.equal(seen.at(-1).key,'Bearer sk-test-key');
 });
+
+test('connection test reports the provider message, the key tail and checks the model id',async t=>{
+  const models=await start(createServer((req,res)=>{
+    res.setHeader('Content-Type','application/json');
+    if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'gpt-image-1'},{id:'gemini-nano-banana-2.1-2k'}]}));
+    res.statusCode=404;res.end(JSON.stringify({error:{message:'no such route'}}));
+  }),t);
+  const denied=await start(createServer((req,res)=>{
+    res.statusCode=401;res.setHeader('Content-Type','application/json');
+    res.end(JSON.stringify({error:{code:'invalid_request',message:'Invalid token (request id: MA20261123095037)'}}));
+  }),t);
+  const base=await start(createImageServer(),t);
+  const call=(action,body)=>fetch(base+'/api/image-profiles'+action,{method:body?'POST':'GET',
+    headers:{Origin:'http://127.0.0.1:8881','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  const profile=await (await call('',{name:'apilio.ai',key:'sk-good-key-1234',edit:true,
+    baseUrl:models+'/v1',model:'gemini-nano-banana-2.1-2k',imageField:'image'})).json();
+  const ok=await (await call('/test',{id:profile.id})).json();
+  assert.equal(ok.checked,true);
+  assert.equal(ok.modelMissing,false);
+  assert.match(ok.message,/可用/);
+  const wrong=await (await call('',{...profile,key:'',model:'nano-banana-x'})).json();
+  const missing=await (await call('/test',{id:wrong.id})).json();
+  assert.equal(missing.modelMissing,true);
+  assert.match(missing.message,/gpt-image-1/);
+  const deniedProfile=await (await call('',{name:'denied',key:'sk-bad-key-9999',edit:true,
+    baseUrl:denied+'/v1',model:'gemini-nano-banana-2.1-2k'})).json();
+  const logs=[],original=console.error;
+  console.error=(...args)=>logs.push(args.join(' '));
+  let bad;
+  try{ bad=await call('/test',{id:deniedProfile.id}); }
+  finally{ console.error=original; }
+  assert.equal(bad.status,502);
+  const text=(await bad.json()).error;
+  assert.match(text,/HTTP 401/);
+  // 只给归类后的诊断和自家密钥尾号，服务商原文留在服务端日志里。
+  assert.match(text,/拒绝了该密钥/);
+  assert.match(text,/…9999/);
+  assert.doesNotMatch(text,/Invalid token/);
+  assert.doesNotMatch(text,/MA2026/);
+  assert.match(logs.join('\n'),/Invalid token/);
+  const plain=await (await call('',{name:'plain',key:'sk-plain-7777',edit:true,
+    baseUrl:models+'/plain/v1',model:'whatever'})).json();
+  const degraded=await (await call('/test',{id:plain.id})).json();
+  assert.equal(degraded.checked,false);
+  assert.match(degraded.message,/连接成功/);
+});

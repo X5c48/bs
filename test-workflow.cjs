@@ -524,11 +524,14 @@ test('Qwen-Image-2.1 路由：整图渲染走专用通道，实时帧与选区�
   assert.equal(calls[0][1].sourceImage, png);
   assert.match(calls[0][1].negative, /lowres/);
 
-  // 2. live:true 仍走 SD1.5 renderLive（qwen 不参与实时）
+  // 2. live:true 走 Qwen 慢速预览通道：分体式 diffusion 进 SD 实时工作流必然 400 失败
   calls.length = 0;
-  await generate({ kind: 'render', provider: 'comfy', live: true, source: png, endpoint: 'http://localhost:8188', checkpoint: qwen, prompt: 'a lamp', controlnet: 'scribble.safetensors' });
-  assert.equal(calls[0][0], 'live');
+  await generate({ kind: 'render', provider: 'comfy', live: true, liveTier:'balanced', source: png, endpoint: 'http://localhost:8188', checkpoint: qwen, prompt: 'a lamp', controlnet: 'scribble.safetensors' });
+  assert.equal(calls[0][0], 'qwen');
   assert.equal(calls.length, 1);
+  assert.equal(calls[0][1].sourceImage, png);
+  assert.ok(calls[0][1].resolution <= 640, '实时档必须压低分辨率换响应：' + calls[0][1].resolution);
+  assert.equal(calls[0][1].cancelPending, true, '实时帧要能取消在途任务');
 
   // 3. 选区重绘 + qwen → 明确报错
   await assert.rejects(generate({ kind: 'modify', provider: 'comfy', source: png, endpoint: 'http://localhost:8188', checkpoint: qwen, prompt: 'x', selection: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] }), /选区重绘请换 SD1\.5/);
@@ -709,4 +712,163 @@ test('studio render: a line-art source goes through ControlNet sketch path inste
   assert.equal(calls[0].controlnet,'scribble.safetensors');
   await generate({kind:'studio',shot:'hero',provider:'comfy',source:png,endpoint:'e',checkpoint:'v1-5.safetensors',prompt:'lamp'});
   assert.equal(calls[1].input,'image','没有 ControlNet 时回退 img2img');
+});
+
+/* ── 生成视角严格基于造型数据：结构投影 + 几何锁定 ── */
+
+function renderHarness({controlnets}={}){
+  const live=[], qwen=[], canvases=[];
+  const png=()=>new Blob(['png'],{type:'image/png'});
+  const context2d=()=>({
+    fillStyle:'',strokeStyle:'',lineWidth:1,lineJoin:'',lineCap:'',globalAlpha:1,
+    fillRect(){},drawImage(){},beginPath(){},moveTo(){},lineTo(){},closePath(){},fill(){},stroke(){},
+    getImageData:(x,y,w,h)=>({data:new Uint8ClampedArray(w*h*4)}),
+    putImageData(){}
+  });
+  const document={
+    createElement:tag=>{
+      if(tag!=='canvas') throw new Error('unexpected '+tag);
+      const canvas={width:0,height:0,getContext:()=>context2d(),toBlob:cb=>cb(png())};
+      canvases.push(canvas);
+      return canvas;
+    }
+  };
+  const window={WuyingShapeModel:require('./dist/shape-model.js'),
+    WuyingComfy:{
+      renderLive:async options=>{live.push(options);return {blob:png()};},
+      renderQwen:async options=>{qwen.push(options);return {blob:png()};}
+    },
+    WuyingWorkspaceRender:null};
+  const context=vm.createContext({window,document,Blob,Uint8ClampedArray,
+    createImageBitmap:async()=>({width:640,height:480,close(){}}),
+    fetch:async()=>{
+      return {json:async()=>({ControlNetLoader:{input:{required:{control_net_name:[['control_v11p_sd15_scribble_fp16']]}}}})};
+    }});
+  vm.runInContext(fs.readFileSync(__dirname+'/dist/workspace-render.js','utf8'),context);
+  return {render:window.WuyingWorkspaceRender,live,qwen,canvases,png};
+}
+
+test('resolveViewAngle：规范角度表 + 角度球自定义覆盖与钳位',()=>{
+  const {render}=renderHarness();
+  const angle=(view,custom)=>{const r=render.resolveViewAngle(view,custom);return {azimuth:r.azimuth,elevation:r.elevation};};
+  assert.deepEqual(angle('right'),{azimuth:90,elevation:0});
+  assert.deepEqual(angle('front-left'),{azimuth:315,elevation:0});
+  assert.deepEqual(angle('top'),{azimuth:0,elevation:85});
+  assert.deepEqual(angle('bottom'),{azimuth:0,elevation:-85});
+  // 角度球精确角度覆盖规范值
+  assert.deepEqual(angle('front-right',{azimuth:37,elevation:12}),{azimuth:37,elevation:12});
+  assert.equal(angle('front',{azimuth:-45,elevation:0}).azimuth,315); // 负角回绕
+  assert.equal(angle('front',{azimuth:0,elevation:120}).elevation,85); // 俯仰钳位
+  assert.deepEqual(angle('right',{azimuth:'x'}),{azimuth:90,elevation:0}); // 非法回落
+});
+
+test('结构锁定的视角生成：ControlNet 全程控形、强度提升、指令里带几何锁定',async()=>{
+  const {render,live,png}=renderHarness();
+  const blob=await render.generate({kind:'view',source:png(),structureImage:png(),
+    endpoint:'http://127.0.0.1:8188',checkpoint:'v1-5-pruned-emaonly-fp16.safetensors',
+    controlnet:'',strength:.5,prompt:'right view'});
+  assert.ok(blob instanceof Blob);
+  assert.equal(live.length,1);
+  const call=live[0];
+  assert.equal(call.input,'sketch');
+  assert.equal(call.controlnet,'control_v11p_sd15_scribble_fp16');
+  assert.equal(call.strength,.82);
+  assert.equal(call.endPercent,1);
+  assert.match(call.prompt,/exactly as drawn/);
+  assert.match(call.prompt,/right view/);
+  // 没有结构图时保持原行为：视角生成不走 sketch 通道
+  const plain=await render.generate({kind:'view',source:png(),
+    endpoint:'http://127.0.0.1:8188',checkpoint:'v1-5-pruned-emaonly-fp16.safetensors',strength:.5,prompt:'right view'});
+  assert.ok(plain instanceof Blob);
+  assert.equal(live[1].input,'image');
+  assert.equal(live[1].controlnet,'');
+});
+
+test('Qwen 视角生成把结构投影作为参考图传入，禁止脱离造型',async()=>{
+  const {render,qwen,png}=renderHarness();
+  await render.generate({kind:'view',source:png(),structureImage:png(),
+    endpoint:'http://127.0.0.1:8188',checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors',
+    strength:.5,prompt:'front view'});
+  assert.equal(qwen.length,1);
+  // renderQwen 的参考图参数就是 sourceImage（内部接到 images.image_1）
+  assert.ok(qwen[0].sourceImage instanceof Blob,'结构线稿作为参考图');
+  assert.match(qwen[0].prompt,/exactly as drawn/);
+  assert.equal(qwen[0].negative.includes('blurry'),true,'必须带质量负面词');
+  // 没有结构图时用源图作参考（造型仍来自画面本身）
+  await render.generate({kind:'view',source:png(),
+    endpoint:'http://127.0.0.1:8188',checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors',
+    strength:.5,prompt:'front view'});
+  assert.ok(qwen[1].sourceImage instanceof Blob);
+});
+
+test('视角请求带部件数据时按视角投影结构线稿并随请求下发',async()=>{
+  const calls=[];
+  const png=new Blob(['source'],{type:'image/png'});
+  const window={
+    WuyingImageSelection:{enough:()=>true},
+    WuyingWorkspaceComposite:{toPng:async()=>png},
+    WuyingComfy:{runImageTool:async()=>({blob:new Blob(['png'],{type:'image/png'})})},
+    WuyingWorkspaceRender:{
+      generate:async options=>{calls.push(options);return new Blob(['png'],{type:'image/png'});},
+      resolveViewAngle:(view,custom)=>custom&&Number.isFinite(custom.azimuth)
+        ?{azimuth:custom.azimuth,elevation:custom.elevation}:{azimuth:90,elevation:0},
+      structureSketchBlob:async()=>new Blob(['struct'],{type:'image/png'})
+    }};
+  const context=vm.createContext({window,crypto,localStorage:{getItem:()=>null,setItem(){}},
+    Blob,Uint32Array,createImageBitmap:async()=>({width:64,height:48,close(){}})});
+  vm.runInContext(fs.readFileSync(__dirname+'/dist/workspace-workflow.js','utf8'),context);
+  const flow=window.WuyingWorkflow;
+  const source=id(),block=id();
+  const part={id:'p1',shape:'rectangle',name:'底盘',locked:false,x:320,y:240,width:200,height:100,angle:0,depth:20,z:0};
+  const doc={assets:{[source]:{id:source,name:'挂钟',width:640,height:480,layers:[{blobId:id()}],
+    draft:{revision:'r1',parts:[part]}}},blocks:{[block]:{x:330,y:10}},jobs:{}};
+  const store=memoryStore(doc,new Map());
+  // 右视：部件数据 → 结构线稿随请求下发，角度球精确角度存进 settings
+  const job=await flow.run(store,{kind:'view',sourceId:source,blockId:block,views:['right'],
+    endpoint:'http://127.0.0.1:8188',checkpoint:'v1-5',viewAngles:{right:{azimuth:95,elevation:4}}});
+  assert.ok(calls[0].structureImage instanceof Blob,'结构投影线稿已下发');
+  assert.equal(job.settings.viewAngles.right.azimuth,95);
+  // 无部件数据的视角请求不带结构线稿
+  const plain=id();
+  doc.assets[plain]={id:plain,name:'草图',width:640,height:480,layers:[{blobId:id()}]};
+  await flow.run(store,{kind:'view',sourceId:plain,blockId:block,views:['right'],
+    endpoint:'http://127.0.0.1:8188',checkpoint:'v1-5'});
+  assert.equal(calls[1].structureImage,undefined);
+  // 重跑沿用存下的角度（不重新读球）
+  await flow.run(store,{rerunOf:job.id,endpoint:'http://127.0.0.1:8188',checkpoint:'v1-5'});
+  assert.ok(calls[2].structureImage instanceof Blob);
+  assert.equal(job.settings.viewAngles.right.azimuth,95);
+});
+
+test('Qwen 通道：分辨率映射按显存上限钳到 1024，出图追加产品摄影与还原约束', async () => {
+  const {render,qwen,png}=renderHarness();
+  assert.equal(render.qwenResolution('1k'),1024);
+  assert.equal(render.qwenResolution('2k'),1024,'8G 显存下单次上限 1024');
+  assert.equal(render.qwenResolution(768),768);
+  assert.match(render.qwenDirective,/exactly as shown/);
+  assert.match(render.qwenNegative,/distorted silhouette/);
+  await render.generate({kind:'render',source:png(),endpoint:'http://127.0.0.1:8188',
+    checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors',prompt:'a lamp',size:{width:640,height:480}});
+  const call=qwen[0];
+  const text=call.prompt;
+  assert.match(text,/Photorealistic product design render/,'出图必须带摄影脚手架');
+  assert.ok(text.indexOf('a lamp')===0,'用户提示词仍在最前');
+  assert.match(call.negative,/distorted silhouette/);
+  assert.equal(call.sourceImage instanceof Blob,true);
+});
+
+test('精细渲染读取三张视图的实际像素，按原输入重跑复用冻结快照',async()=>{
+  const primary=new Blob(['white model'],{type:'image/png'});
+  const {flow,calls}=load(primary),source=id(),batch=id();
+  const outputs=['front','left','top'].map(view=>({id:id(),view,blobId:id()}));
+  const blobs=new Map(outputs.map(o=>[o.blobId,new Blob([o.view],{type:'image/png'})]));
+  const doc={assets:{[source]:{id:source,name:'白模',width:640,height:480,layers:[{blobId:id()}]}},blocks:{},jobs:{[batch]:{id:batch,outputs}}};
+  const store=memoryStore(doc,blobs);
+  const references=outputs.map(o=>({id:o.id,role:'ortho-'+o.view,outputJobId:batch}));
+  const first=await flow.run(store,{kind:'render',sourceId:source,prompt:'desk lamp',references,endpoint:'local',checkpoint:'model'});
+  assert.deepEqual(await Promise.all(calls[0].references.map(r=>r.blob.text())),['front','left','top']);
+  for(const o of outputs) blobs.delete(o.blobId);
+  const second=await flow.run(store,{rerunOf:first.id,endpoint:'local',checkpoint:'model'});
+  assert.deepEqual(second.references,first.references);
+  assert.deepEqual(await Promise.all(calls.at(-1).references.map(r=>r.blob.text())),['front','left','top']);
 });

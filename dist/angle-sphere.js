@@ -53,7 +53,7 @@
     return Math.cos(el) * Math.cos(az);
   }
 
-  function create({ size = 148, onChange = () => {}, label = '视角球' } = {}) {
+  function create({ size = 148, onChange = () => {}, getParts = () => [], label = '视角球' } = {}) {
     size = Math.max(96, size);
     const svg = document.createElementNS(svgNS, 'svg');
     svg.setAttribute('viewBox', '0 0 ' + size + ' ' + size);
@@ -63,20 +63,46 @@
     const circle = tag('circle', { cx: size / 2, cy: size / 2, r: size * .38, class: 'sphere-body' });
     const equator = tag('ellipse', { cx: size / 2, cy: size / 2, rx: size * .38, ry: size * .12, class: 'sphere-line' });
     const meridian = tag('ellipse', { cx: size / 2, cy: size / 2, rx: size * .12, ry: size * .38, class: 'sphere-line' });
-    const crossV = tag('line', { x1: size / 2, y1: size * .06, x2: size / 2, y2: size * .94, class: 'sphere-line' });
-    const crossH = tag('line', { x1: size * .06, y1: size / 2, x2: size * .94, y2: size / 2, class: 'sphere-line' });
+    const crossV = tag('line', { x1: size / 2, y1: size * .12, x2: size / 2, y2: size * .88, class: 'sphere-line' });
+    const crossH = tag('line', { x1: size * .12, y1: size / 2, x2: size * .88, y2: size / 2, class: 'sphere-line' });
     const handle = tag('circle', { r: Math.max(9, size * .075), class: 'sphere-handle' });
     const readout = tag('text', { x: size / 2, y: size - 6, class: 'sphere-readout', 'text-anchor': 'middle' });
-    svg.append(circle, equator, meridian, crossV, crossH, handle, readout);
+    const subject=tag('g',{'class':'sphere-subject','aria-hidden':'true'});
+    svg.append(circle,equator,meridian,crossV,crossH,subject,handle,readout);
     const state = { azimuth: 0, elevation: 0 };
-    let dragging = false;
+    let pointerId=null;
 
     function tag(name, attrs) {
       const node = document.createElementNS(svgNS, name);
       for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
       return node;
     }
+    function syncSubject(){
+      const model=window.WuyingShapeModel,parts=getParts();
+      if(!model||!parts.length){subject.replaceChildren();return;}
+      const boxes=parts.map(p=>model.outlineBounds(p)),depth=model.depthSpan(parts);
+      const cx=(Math.min(...boxes.map(b=>b.x))+Math.max(...boxes.map(b=>b.x+b.width)))/2;
+      const cy=(Math.min(...boxes.map(b=>b.y))+Math.max(...boxes.map(b=>b.y+b.height)))/2;
+      const cz=(depth.min+depth.max)/2;
+      const az=-state.azimuth*Math.PI/180,el=state.elevation*Math.PI/180;
+      let radius=1;
+      const faces=[];
+      for(const part of parts){
+        const centered={...part,x:part.x-cx,y:part.y-cy,z:part.z-cz};
+        const farZ=Math.abs(centered.z)+centered.depth/2;
+        for(const p of model.polygon(centered)) radius=Math.max(radius,Math.hypot(p.x,p.y,farZ));
+        faces.push(...model.blockFaces(centered,az,el));
+      }
+      const scale=size*.33/radius;
+      const depthOf=face=>face.points.reduce((sum,p)=>sum+p.d,0)/face.points.length;
+      subject.replaceChildren(...faces.sort((a,b)=>depthOf(b)-depthOf(a)).map(face=>{
+        const tone=Math.round(90+150*face.shade);
+        return tag('polygon',{points:face.points.map(p=>[size/2+p.x*scale,size/2+p.y*scale].join(',')).join(' '),
+          fill:'rgb('+tone+','+tone+','+Math.min(255,tone+10)+')',stroke:'#646675','stroke-width':.45});
+      }));
+    }
     function sync() {
+      syncSubject();
       const point = handlePoint(state.azimuth, state.elevation, size);
       handle.setAttribute('cx', point.x);
       handle.setAttribute('cy', point.y);
@@ -99,21 +125,23 @@
       sync();
     }
     svg.addEventListener('pointerdown', event => {
-      if (event.button !== 0) return;
-      dragging = true;
+      if (event.button !== 0||pointerId!==null) return;
+      pointerId=event.pointerId;
       last = { x: event.clientX, y: event.clientY };
       svg.setPointerCapture(event.pointerId);
       event.preventDefault();
     });
-    svg.addEventListener('pointermove', event => { if (dragging) fromEvent(event); });
+    svg.addEventListener('pointermove', event => { if (pointerId===event.pointerId) fromEvent(event); });
     const release = event => {
-      if (!dragging) return;
-      dragging = false;
+      if(pointerId!==event.pointerId) return;
+      pointerId=null;
       last = null;
       onChange(read());
     };
     svg.addEventListener('pointerup', release);
-    svg.addEventListener('lostpointercapture', release);
+    const cancel=()=>{pointerId=null;last=null;};
+    svg.addEventListener('lostpointercapture',cancel);
+    svg.addEventListener('pointercancel',cancel);
     svg.addEventListener('keydown', event => {
       const step = event.shiftKey ? 15 : 5;
       let handled = true;

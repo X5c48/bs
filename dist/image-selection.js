@@ -59,25 +59,107 @@
     return { x,y,width:cropWidth,height:cropHeight };
   }
 
-  async function prepare(blob, points, protectedAreas=[]) {
+  // Match a hand-drawn stroke to the old part before using it to extend the cleanup area.
+  function addMatchedInk(mask, local, previous, neighbors, strokes) {
+    if(!strokes?.length) return;
+    const band=canvas(mask.canvas.width,mask.canvas.height).getContext('2d',{willReadFrequently:true});
+    band.lineJoin='round';band.lineWidth=64;
+    path(band,previous,local);band.stroke();
+    band.globalCompositeOperation='destination-out';
+    band.lineWidth=16;
+    for(const other of neighbors){path(band,other,local);band.fill();band.stroke();}
+    const {width,height}=band.canvas;
+    const pixels=band.getImageData(0,0,width,height).data;
+    const ink=canvas(width,height).getContext('2d');
+    ink.lineCap=ink.lineJoin='round';
+    for(const stroke of strokes){
+      if(stroke.erase||stroke.points?.length<2) continue;
+      const coords=stroke.points.map(local);
+      let matched=0;
+      for(const [cx,cy] of coords){
+        const x=Math.round(cx),y=Math.round(cy);
+        if(x>=0&&x<width&&y>=0&&y<height&&pixels[(y*width+x)*4+3]>127) matched++;
+      }
+      if(matched<coords.length*.55) continue;
+      ink.lineWidth=Math.min(150,Number(stroke.size)||4)+4;
+      ink.beginPath();
+      coords.forEach(([x,y],i)=>i?ink.lineTo(x,y):ink.moveTo(x,y));
+      ink.stroke();
+    }
+    ink.globalCompositeOperation='destination-in';
+    ink.drawImage(band.canvas,0,0);
+    mask.drawImage(ink.canvas,0,0);
+  }
+
+  // 只清理旧轮廓覆盖、当前轮廓已经离开的白纸区域。相邻部件和新边缘优先保留。
+  function clearVacatedInk(source,crop,original,points,options){
+    const zone=canvas(crop.width,crop.height),mask=zone.getContext('2d');
+    const local=p=>[p.x*original.width-crop.x,p.y*original.height-crop.y];
+    mask.lineJoin='round';mask.lineWidth=16;
+    path(mask,options.previous,local);mask.fill();mask.stroke();
+    addMatchedInk(mask,local,options.previous,options.neighbors,options.inkStrokes);
+    mask.globalCompositeOperation='destination-out';
+    for(const area of [points,...options.neighbors]){
+      path(mask,area,local);mask.fill();mask.stroke();
+    }
+    const coverage=mask.getImageData(0,0,crop.width,crop.height).data;
+    const ctx=source.getContext('2d'),pixels=ctx.getImageData(0,0,crop.width,crop.height);
+    const data=pixels.data,raw=new Uint8ClampedArray(data);
+    const offsets=[[-8,0],[8,0],[0,-8],[0,8],[-6,-6],[-6,6],[6,-6],[6,6]];
+    for(let y=0;y<crop.height;y++) for(let x=0;x<crop.width;x++){
+      const i=4*(y*crop.width+x);
+      if(coverage[i+3]!==255||raw[i+3]!==255||Math.max(raw[i],raw[i+1],raw[i+2])>230) continue;
+      let paper=0;
+      for(const [dx,dy] of offsets){
+        const nx=x+dx,ny=y+dy;
+        if(nx<0||ny<0||nx>=crop.width||ny>=crop.height) continue;
+        const j=4*(ny*crop.width+nx);
+        if(Math.min(raw[j],raw[j+1],raw[j+2],raw[j+3])>=250) paper++;
+      }
+      if(paper>=5) data[i]=data[i+1]=data[i+2]=255;
+    }
+    ctx.putImageData(pixels,0,0);
+  }
+
+  async function prepare(blob, points, protectedAreas=[], options={}) {
     if (!enough(points)) throw new Error('请圈出一块有面积的区域。');
     const bitmap = await decode(blob);
     try {
       const original = canvas(bitmap.width,bitmap.height);
       original.getContext('2d').drawImage(bitmap,0,0);
-      const crop = cropFor(points,bitmap.width,bitmap.height);
-      const scale = Math.min(2,896/Math.max(crop.width,crop.height));
+      const areas=[points,...(options.previous?[options.previous]:[])];
+      const crop = cropFor(areas.flat(),bitmap.width,bitmap.height);
+      const scale = Math.min(2,(options.longEdge||896)/Math.max(crop.width,crop.height));
       const align = size => Math.max(64,Math.round(size*scale/8)*8);
       const width = align(crop.width), height = align(crop.height);
       const source = canvas(width,height), mask = canvas(width,height);
-      source.getContext('2d').drawImage(bitmap,crop.x,crop.y,crop.width,crop.height,0,0,width,height);
+      if(options.cleanInk){
+        const input=canvas(crop.width,crop.height);
+        input.getContext('2d').drawImage(bitmap,-crop.x,-crop.y);
+        clearVacatedInk(input,crop,original,points,options);
+        // 羽化使用同一张已清理的底图，避免旧笔迹从透明边缘透回。
+        original.getContext('2d').putImageData(input.getContext('2d').getImageData(0,0,crop.width,crop.height),crop.x,crop.y);
+        source.getContext('2d').drawImage(input,0,0,width,height);
+      }else source.getContext('2d').drawImage(bitmap,crop.x,crop.y,crop.width,crop.height,0,0,width,height);
       const ctx = mask.getContext('2d');
       ctx.fillStyle = '#000';
       ctx.fillRect(0,0,width,height);
       ctx.fillStyle = '#fff';
       const toCrop=p=>[(p.x*bitmap.width-crop.x)*width/crop.width,(p.y*bitmap.height-crop.y)*height/crop.height];
-      path(ctx,points,toCrop);
-      ctx.fill('evenodd');
+      let alpha;
+      if(options.previous){
+        alpha=canvas(crop.width,crop.height);
+        const paint=alpha.getContext('2d');
+        const local=p=>[p.x*bitmap.width-crop.x,p.y*bitmap.height-crop.y];
+        paint.fillStyle=paint.strokeStyle='white';
+        paint.lineJoin='round';paint.lineWidth=16;
+        for(const area of areas){path(paint,area,local);paint.fill();paint.stroke();}
+        paint.globalCompositeOperation='destination-out';paint.lineWidth=3;
+        for(const area of protectedAreas){path(paint,area,local);paint.fill();paint.stroke();}
+        ctx.drawImage(alpha,0,0,width,height);
+      }else{
+        path(ctx,points,toCrop);ctx.fill('evenodd');
+      }
       if(protectedAreas.length){
         ctx.fillStyle=ctx.strokeStyle='#000';
         ctx.lineWidth=Math.max(2,2*width/crop.width);
@@ -87,7 +169,7 @@
         if(!bytes.some((value,index)=>index%4===0&&value>=128)) throw new Error('选中部件没有可编辑区域。');
       }
       const [sourceImage,maskImage] = await Promise.all([png(source),png(mask)]);
-      return {sourceImage,maskImage,original,crop,points,protectedAreas};
+      return {sourceImage,maskImage,original,crop,points,protectedAreas,alpha};
     } finally {bitmap.close();}
   }
 
@@ -96,6 +178,15 @@
     const {original,crop,points,protectedAreas=[]} = prepared;
     try {
       const ctx = original.getContext('2d');
+      if(prepared.alpha){
+        const patchCanvas=canvas(crop.width,crop.height),layer=patchCanvas.getContext('2d');
+        layer.drawImage(edit,0,0,crop.width,crop.height);
+        layer.globalCompositeOperation='destination-in';
+        if(feather){layer.filter='blur('+(feather/3)+'px)';layer.drawImage(prepared.alpha,0,0);layer.filter='none';}
+        layer.drawImage(prepared.alpha,0,0);
+        ctx.drawImage(patchCanvas,crop.x,crop.y);
+        return await png(original);
+      }
       let overlay=edit;
       if(feather>0||protectedAreas.length){
         overlay=canvas(crop.width,crop.height);

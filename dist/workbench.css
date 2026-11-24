@@ -157,3 +157,35 @@ dialog::backdrop{background:#101015b8}
 .wb-mention:hover{color:var(--text)}
 .wb-node[data-adopted=true]{box-shadow:0 0 0 2px #e6b84a}
 .wb-adopt{color:#f3cf72}
+.review-document{max-width:980px;margin:0 auto;padding:24px clamp(14px,4vw,48px);line-height:1.6}
+.review-document section{border-top:1px solid var(--line);padding:18px 0}
+.review-document h2{display:inline-block;margin:0 12px 12px 0;font-size:21px}
+.review-document h3{font-size:14px;margin:14px 0 2px;color:var(--quiet)}
+.review-document pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+.review-document img{display:block;max-width:100%;min-height:30px;height:auto;margin:12px 0}
+.review-document textarea,.review-document select{width:100%;background:var(--surface);color:var(--text);padding:8px;border:1px solid var(--line);border-radius:5px}
+.review-document label{display:block;margin:8px 0}.review-document button{margin-right:6px}
+
+/* 造型探索（草图模块）：发散/裂变入口与方案说明 */
+.wb-explore{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--sunken)}
+.wb-explore .wb-action-grid{margin-top:2px}
+
+/* 快速草图浮层：画笔与橡皮各有独立尺寸入口 */
+.sketch-pad{position:fixed;inset:0;z-index:80;display:grid;grid-template-rows:auto 1fr;background:color-mix(in srgb,var(--bg) 92%,#000);padding:14px;gap:10px}
+.sketch-pad[hidden]{display:none}
+.sketch-pad-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--raised)}
+.sketch-pad-bar strong{font-size:13px}
+.sketch-pad-tools{display:flex;gap:4px;padding:2px;border-radius:7px;background:var(--sunken)}
+.sketch-pad-tools button{min-height:28px;padding:0 12px;border:0;border-radius:5px;background:transparent;color:var(--quiet);font-size:12px;cursor:pointer}
+.sketch-pad-tools button[aria-pressed=true]{background:var(--raised);color:var(--text);box-shadow:0 1px 2px rgb(0 0 0/.12)}
+.sketch-pad-size{display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid transparent;border-radius:7px;font-size:11px;color:var(--quiet);white-space:nowrap}
+.sketch-pad-size.is-active{border-color:var(--line);background:var(--sunken);color:var(--text)}
+.sketch-pad-size input[type=range]{width:92px;accent-color:var(--active)}
+.sketch-pad-size output{font-variant-numeric:tabular-nums;color:var(--faint);min-width:38px}
+#padColor{width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--raised)}
+.sketch-pad-bar #padStatus{font-size:11px;color:var(--quiet);flex:1;min-width:80px}
+.sketch-pad-bar #padStatus[data-error=true]{color:var(--danger,#c0392b)}
+.sketch-pad-save{min-height:30px;padding:0 16px;border:0;border-radius:6px;background:var(--active);color:#fff;font-size:12px;cursor:pointer}
+.sketch-pad-stage{display:grid;place-items:center;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--sunken);padding:12px}
+.sketch-pad-stage canvas{max-width:100%;max-height:100%;background:#fff;border-radius:4px;box-shadow:0 6px 24px rgb(0 0 0/.14);touch-action:none;cursor:crosshair}
+.sketch-pad-stage canvas[data-tool=erase]{cursor:cell}

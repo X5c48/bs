@@ -1,0 +1,59 @@
+{
+  "endpoint": "http://127.0.0.1:8188",
+  "checkpoint": "v1-5-pruned-emaonly-fp16.safetensors",
+  "controlnet": "control_v11p_sd15_scribble_fp16.safetensors",
+  "tiers": {
+    "tight": {
+      "file": "p7-tight.png",
+      "ms": 9674,
+      "whiteRatio": 0.991,
+      "edgeChromaRatio": 0,
+      "lineIou": 0.747,
+      "linePixels": 2753
+    },
+    "balanced": {
+      "file": "p7-balanced.png",
+      "ms": 7598,
+      "whiteRatio": 0.984,
+      "edgeChromaRatio": 0,
+      "lineIou": 0.233,
+      "linePixels": 2125
+    },
+    "loose": {
+      "file": "p7-loose.png",
+      "ms": 7773,
+      "whiteRatio": 0.942,
+      "edgeChromaRatio": 0,
+      "lineIou": 0.097,
+      "linePixels": 966
+    }
+  },
+  "candidates": {
+    "seeds": [
+      20261123,
+      771,
+      99173
+    ],
+    "pairs": [
+      {
+        "pair": "1-2",
+        "diff": 0.514
+      },
+      {
+        "pair": "1-3",
+        "diff": 0.411
+      },
+      {
+        "pair": "2-3",
+        "diff": 0.597
+      }
+    ]
+  },
+  "checks": {
+    "tightIouPass": true,
+    "loosenessMonotonic": true,
+    "candidatesDiffer": true,
+    "whiteBackground": true,
+    "noColoredScene": true
+  }
+}

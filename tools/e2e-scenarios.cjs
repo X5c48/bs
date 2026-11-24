@@ -440,7 +440,7 @@ scenarios.flow = async function flow(page, { check, ids, endpoint }) {
   const lineStatus=await page.textContent('#studioRunStatus');
   check('一键转线稿出图并加为图层', lineStatus.includes('已加为新图层'), lineStatus);
   // 阶段切到三视图：预选正视/侧视/俯视
-  await page.click('#studioFlowRail [data-stage="ortho"]');
+  await page.click('[data-view-mode="ortho"]');
   await page.waitForFunction(() => document.querySelector('#orthoQuick') && !document.querySelector('#orthoQuick').hidden, null, { timeout: 5000 });
   check('三视图阶段预选 3 个标准角度', await page.evaluate(() => window.WuyingVariationControls ? true : true)
     && (await page.locator('#studioDirectionList, .view-map [data-view][aria-pressed="true"]').count())>=0
@@ -545,7 +545,7 @@ scenarios.refine = async function refine(page, { check, ids, endpoint }) {
     }, ids);
     check('锁定部件区域与底图像素一致', same.ok, JSON.stringify(same));
   }
-  check('三视图阶段可从轨道直达', (await page.getAttribute('#railOrtho','href')).includes('stage=ortho'));
+  check('产品渲染可从轨道直达（三视图在展示区切换）', (await page.getAttribute('#railRender','href')).includes('stage=render'));
   check('回草图造型可从轨道直达', (await page.getAttribute('#railSketch','href')).includes('image-studio.html'));
 };
 

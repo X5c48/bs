@@ -12,7 +12,8 @@
   <script src="project-store.js" defer></script><script src="workspace-store.js" defer></script><script src="workspace-account.js" defer></script><script src="workspace-assets.js" defer></script>
   <script src="comfy.js" defer></script><script src="image-selection.js" defer></script>
   <script src="shape-model.js" defer></script><script src="workspace-composite.js" defer></script><script src="platform-api.js" defer></script><script src="workspace-render.js" defer></script>
-  <script src="workspace-workflow.js" defer></script><script src="workspace-video.js" defer></script><script src="workspace-variation.js" defer></script><script src="workbench.js" defer></script>
+  <script src="workspace-workflow.js" defer></script><script src="workspace-video.js" defer></script><script src="workspace-variation.js" defer></script>
+  <script src="sketch-explore.js" defer></script><script src="sketch-pad.js" defer></script><script src="workbench.js" defer></script>
 </head>
 <body>
   <header class="wb-header">
@@ -20,7 +21,7 @@
     <nav class="wb-modes" aria-label="模式"><a aria-current="page" href="#">工作台</a><a id="studioMode" href="image-studio.html">图像编辑</a></nav>
     <div class="wb-actions">
       <button type="button" id="toggleView" aria-expanded="false" aria-controls="viewMenu">视图</button>
-      <button type="button" id="openVideo">展示视频</button><button type="button" id="openModel">模型连接</button>
+      <button type="button" id="openModel">模型连接</button>
       <button type="button" id="exportSelected" disabled title="导出选中的图">导出</button>
     </div>
   </header>
@@ -40,7 +41,7 @@
         <section id="workspaceEmpty" class="wb-empty" hidden>
           <h1>从部件草稿开始</h1>
           <p>描出产品轮廓，锁住已定部件，再推敲其他部分。</p>
-          <div><button type="button" class="wb-primary" id="emptyDraft">新建部件草稿</button><button type="button" id="emptySketch">新建手绘</button><button type="button" id="emptyImport">导入图片</button></div>
+          <div><button type="button" class="wb-primary" id="emptyDraft">新建部件草稿</button><button type="button" id="emptyPad">快速草图</button><button type="button" id="emptySketch">新建手绘</button><button type="button" id="emptyImport">导入图片</button></div>
         </section>
       </div>
       <div class="wb-toolbar" role="toolbar" aria-orientation="vertical" aria-label="画布工具">
@@ -48,6 +49,7 @@
         <button type="button" data-wb-tool="hand" aria-pressed="false" title="抓手 (H)" aria-label="抓手"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 9V4.5a1.2 1.2 0 012.4 0V9m0-1V3.5a1.2 1.2 0 012.4 0V9m0-.5V4.5a1.2 1.2 0 012.4 0V11c0 3.5-2 6-5.2 6-2.3 0-3.3-1-4.8-3.6L3 10.6a1.2 1.2 0 012-1.2L7 11"/></svg></button>
         <hr>
         <button type="button" id="toggleInsert" aria-expanded="false" aria-controls="insertMenu" title="添加 (A)" aria-label="添加"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg></button>
+        <button type="button" id="quickSketch" title="快速草图" aria-label="快速草图"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16l1-3.5L13.5 4a1.6 1.6 0 012.3 0l.2.2a1.6 1.6 0 010 2.3L7.5 15z"/></svg></button>
         <button type="button" id="railUpload" title="上传图片 (I)" aria-label="上传图片"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 13V4M6.5 7.5L10 4l3.5 3.5M4 13v3h12v-3"/></svg></button>
         <hr>
         <button type="button" id="openShortcuts" title="快捷键 (?)" aria-label="快捷键">?</button>
@@ -130,5 +132,22 @@
       <div><figure><img id="sourceCompare" alt="生成时的源图"><figcaption>生成时的源图</figcaption></figure><figure><img id="resultCompare" alt="生成结果"><figcaption>生成结果</figcaption></figure></div>
     </div>
   </dialog>
+  <div class="sketch-pad" id="sketchPad" hidden role="dialog" aria-modal="true" aria-label="快速草图">
+    <div class="sketch-pad-bar">
+      <strong>快速草图</strong>
+      <div class="sketch-pad-tools" role="group" aria-label="画布工具">
+        <button type="button" data-pad-tool="brush" aria-pressed="true">画笔</button>
+        <button type="button" data-pad-tool="erase" aria-pressed="false">橡皮</button>
+      </div>
+      <label id="padBrushField" class="sketch-pad-size">画笔大小<input type="range" id="padBrushSize" min="1" max="64" value="6" aria-label="画笔大小"><output id="padBrushSizeValue">6 px</output></label>
+      <label id="padEraseField" class="sketch-pad-size">橡皮大小<input type="range" id="padEraseSize" min="8" max="120" value="30" aria-label="橡皮大小"><output id="padEraseSizeValue">30 px</output></label>
+      <input type="color" id="padColor" value="#202020" aria-label="画笔颜色">
+      <button type="button" id="padUndo">撤销</button>
+      <span id="padStatus" role="status" aria-live="polite"></span>
+      <button type="button" id="padCancel">取消</button>
+      <button type="button" id="padSave" class="sketch-pad-save">完成</button>
+    </div>
+    <div class="sketch-pad-stage"><canvas id="padCanvas" aria-label="快速草图画布"></canvas></div>
+  </div>
 </body>
 </html>

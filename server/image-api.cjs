@@ -116,18 +116,65 @@ async function downloadImage(src,signal,limit=imageLimit){
   });
 }
 
+// 服务商自己的报错原文（如 invalid token / model not found）比状态码有用得多，
+// 去掉 request id 后截断回传，用户一眼能看出是密钥错还是模型错。
+async function upstreamMessage(response,limit=8192){
+  let raw='';
+  try{ raw=(await readBytes(response.body,limit)).toString('utf8'); }
+  catch{ try{ await response.body?.cancel(); }catch{} return ''; }
+  let message='';
+  try{
+    const payload=JSON.parse(raw);
+    const value=payload?.error?.message??payload?.error?.detail??payload?.error??payload?.message??payload?.detail;
+    if(typeof value==='string')message=value;
+  }catch{ message=raw; }
+  return message.replace(/[（(]\s*request id:[^)）]*[)）]/gi,'').replace(/\s+/g,' ').trim().slice(0,180);
+}
+
+// 服务商原文只进服务端日志：它可能带令牌片段或账号信息，不能回给浏览器。
+// 前端拿到的是归类后的诊断，加上用户自己的密钥尾号，足够判断该改哪里。
+function providerHint(code,detail){
+  const text=String(detail||'').toLowerCase();
+  if(code===401||code===403){
+    if(/token not provided|no token|missing (?:api )?key|authorization.*(?:required|missing)/.test(text))
+      return '请求没有带上密钥，请在后台重新粘贴密钥并保存。';
+    if(/invalid token|incorrect api key|invalid api key|disabled|expired|deleted|未授权|令牌/.test(text))
+      return '服务商拒绝了该密钥（无效、已过期或被禁用），请到服务商控制台重新创建令牌。';
+    if(/model/.test(text))return '该密钥没有这个模型的访问权限，请核对模型 ID 与令牌权限。';
+    return '请检查密钥、账户权限和模型访问权限。';
+  }
+  if(code===400||code===422)
+    return /model/.test(text)?'服务商不认这个模型 ID，请照抄模型广场里的 ID。':'请检查模型、尺寸和是否支持当前出图方式。';
+  if(code===404)return '请检查 API 地址、接口路径和模型 ID。';
+  if(code===429)return '请检查接口额度、余额或请求频率。';
+  return '服务商暂时未能处理请求。';
+}
+
 async function upstream(profile,key,route,signal,body){
   const headers={Authorization:'Bearer '+key};
   if(typeof body==='string')headers['Content-Type']='application/json';
   const response=await fetch(profile.baseUrl+route,{headers,method:body?'POST':'GET',body,signal,redirect:'error'});
   if(response.ok)return response;
-  await response.body?.cancel();
   const code=response.status;
-  const message=code===401||code===403?'请检查密钥、账户权限和模型访问权限。':
-    code===404?'请检查 API 地址、接口路径和模型 ID。':
-    code===429?'请检查接口额度、余额或请求频率。':
-    code===400||code===422?'请检查模型、尺寸和是否支持当前出图方式。':'服务商暂时未能处理请求。';
-  throw new ApiError(502,'服务商返回 HTTP '+code+'。'+message);
+  const detail=await upstreamMessage(response);
+  if(detail)console.error('[image-api] '+route+' 上游 HTTP '+code+'：'+detail);
+  const tail=(code===401||code===403)&&key.length>=12?'（本次提交的密钥尾号 …'+key.slice(-4)+'）':'';
+  const error=new ApiError(502,'服务商返回 HTTP '+code+'。'+providerHint(code,detail)+tail);
+  error.upstreamStatus=code;
+  throw error;
+}
+
+// GET /models 的返回格式各家不同：OpenAI 兼容站是 {data:[{id}]}，部分站是 {models:[]} 或纯数组。
+// 解析不出来就当作「无法核对」，不误判为连接失败。
+async function readModels(response,limit=1024*1024){
+  let payload;
+  try{ payload=JSON.parse((await readBytes(response.body,limit)).toString('utf8')); }
+  catch{ return null; }
+  const items=Array.isArray(payload)?payload:
+    Array.isArray(payload?.data)?payload.data:
+    Array.isArray(payload?.models)?payload.models:null;
+  if(!items)return null;
+  return items.map(item=>typeof item==='string'?item:String(item?.id??item?.name??'')).filter(Boolean);
 }
 
 async function render(profile,key,data,signal){
@@ -304,9 +351,24 @@ function createImageServer({profileFile,profilesFile,env={},runningHubOrigin,run
       if(!testing&&data.revision!==selected.revision)throw new ApiError(409,'接口配置已更新，请重新生成。');
       if(!selected.key||!selected.model||!selected.baseUrl)throw new ApiError(400,'请先在后台管理填写该接口的地址、模型和密钥。');
       if(testing){
-        const response=await upstream(selected,selected.key,'/models',AbortSignal.any([abort.signal,AbortSignal.timeout(12000)]));
-        await response.body?.cancel();
-        return json(res,200,{ok:true});
+        const signal=AbortSignal.any([abort.signal,AbortSignal.timeout(15000)]);
+        let response;
+        try{ response=await upstream(selected,selected.key,'/models',signal); }
+        catch(error){
+          // 少数中转站不开放 /models（404/405/501）。能连上就说明地址和密钥格式没问题，
+          // 只是核不到模型，不该当成失败。
+          if([404,405,501].includes(error?.upstreamStatus))
+            return json(res,200,{ok:true,checked:false,message:'连接成功。该接口不提供模型列表，未能核对模型 ID。'});
+          throw error;
+        }
+        const models=await readModels(response);
+        if(!models?.length)
+          return json(res,200,{ok:true,checked:false,message:'连接成功。接口没有返回模型列表，未能核对模型 ID。'});
+        if(models.includes(selected.model))
+          return json(res,200,{ok:true,checked:true,modelMissing:false,message:'连接成功，模型 '+selected.model+' 可用。'});
+        return json(res,200,{ok:true,checked:true,modelMissing:true,
+          message:'连接成功，但当前密钥下找不到模型 '+selected.model+'。可用模型 '+models.length+' 个：'
+            +models.slice(0,6).join('、')+(models.length>6?' 等':'')+'。请照抄模型广场里的 ID。'});
       }
       if(running)throw new ApiError(429,'出图后台已有一个任务正在运行。');
       running=true;

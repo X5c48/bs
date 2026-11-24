@@ -316,7 +316,7 @@ test('combines a color guide latent with separate line conditioning in both prev
   assert.ok(sketch(.9)[9].inputs.denoise < sketch(.2)[9].inputs.denoise);
 });
 
-test('uses distinct temporary files for the line and color images in every live attempt', async (t) => {
+test('live 上传复用固定文件名并覆盖：temp 目录不再随帧数无限增长', async (t) => {
   const { renderLive } = require('./dist/comfy.js');
   const uploads = [];
   t.mock.method(global, 'fetch', async (url, init) => {
@@ -324,7 +324,8 @@ test('uses distinct temporary files for the line and color images in every live 
       case '/upload/image': {
         const file = init.body.get('image');
         assert.equal(init.body.get('type'),'temp');
-        assert.equal(init.body.get('overwrite'),'false');
+        assert.equal(init.body.get('overwrite'),'true');
+        assert.match(file.name,/^wuying-view-1-(input|color)\.png$/);
         uploads.push({ name:file.name, data:await file.text() });
         return Response.json({ name:file.name, type:'temp', subfolder:'wuying-live' });
       }
@@ -345,7 +346,8 @@ test('uses distinct temporary files for the line and color images in every live 
   await renderLive(job);
   await renderLive(job);
   assert.deepEqual(uploads.map(file=>file.data),['sketch','guide','sketch','guide']);
-  assert.equal(new Set(uploads.map(file=>file.name)).size,4);
+  // 同名覆盖：两帧只占两个临时文件（旧实现每帧新名 → temp 膨胀 → ComfyUI 退出）
+  assert.equal(new Set(uploads.map(file=>file.name)).size,2);
 });
 
 for (const legacy of [false, true]) {
@@ -499,12 +501,17 @@ test('Qwen-Image-2.1 工作流：Turbo 8 级 sigma、CFG 1、latent 取编码器
   assert.equal(graph['14'], undefined);
 });
 
-test('Qwen-Image-2.1 带参考图：LoadImage 供图且以 autogrow 字典接到编码器 images 槽', () => {
+test('Qwen-Image-2.1 带参考图：LoadImage 供图，参考图用扁平动态键 images.image_1 接入并接 vae', () => {
   const { qwenWorkflow } = require('./dist/comfy.js');
   const graph = qwenWorkflow({ checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'a lamp', reference:'wuying-live/input-1.png [temp]', seed:1 });
   assert.equal(graph['14'].class_type, 'LoadImage');
   assert.equal(graph['14'].inputs.image, 'wuying-live/input-1.png [temp]');
-  assert.deepEqual(graph['5'].inputs.images, { image_1: ['14', 0] });
+  // Autogrow 动态输入在 API 里是扁平键；写成 {images:{image_1:...}} 会被服务端静默丢弃，
+  // 模型退化成纯文生图（历史 bug：渲染结果与草图造型完全无关）。
+  assert.deepEqual(graph['5'].inputs['images.image_1'], ['14', 0]);
+  assert.equal(graph['5'].inputs.images, undefined);
+  // 不接 vae 只做视觉塔编码，参考 latent 拼不进序列，造型依然锁不住
+  assert.deepEqual(graph['5'].inputs.vae, ['4', 0]);
 });
 
 test('Qwen-Image-2.1 校验：非 qwen 模型、缺提示词、缺端点都要拦截', async () => {
@@ -714,4 +721,26 @@ test('scene region edits add a scribble ControlNet on the sketch guide', async (
     guideImage: new Blob(['sketch-guide'], { type: 'image/png' }), slot: 'scene-test'
   });
   assert.deepEqual(uploaded, ['photo-crop', 'sketch-guide', 'mask']);
+});
+
+test('renderLive 拒绝 Qwen 分体式模型：给出可执行提示而不是 ckpt_name 报错', async () => {
+  const { renderLive } = require('./dist/comfy.js');
+  await assert.rejects(renderLive({
+    ...settings, input:'text', quality:'live', checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'x'
+  }), /Qwen-Image-2\.1 不能走 SD 实时通道/);
+});
+
+test('qwenSigmas：默认 8 步曲线不变，12 步按原曲线插值且末步归零', () => {
+  const { qwenWorkflow } = require('./dist/comfy.js');
+  const eight = qwenWorkflow({ checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'x' });
+  assert.equal(eight['9'].inputs.sigmas.split(',').length, 9);
+  assert.equal(eight['9'].inputs.sigmas.split(',')[0].trim(), '1.0');
+  const twelve = qwenWorkflow({ checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'x', steps:12 });
+  const values = twelve['9'].inputs.sigmas.split(',').map(Number);
+  assert.equal(values.length, 13);
+  assert.equal(values[0], 1);
+  assert.equal(values.at(-1), 0);
+  for (let i = 1; i < values.length; i++) assert.ok(values[i] <= values[i - 1], 'sigma 必须单调下降');
+  // 非法步数回落到默认曲线
+  assert.equal(qwenWorkflow({ checkpoint:'qwen_image_2.1_turbo_int8_convrot.safetensors', prompt:'x', steps:2 })['9'].inputs.sigmas.split(',').length, 9);
 });

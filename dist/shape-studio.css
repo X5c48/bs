@@ -60,6 +60,13 @@ fieldset{min-width:0;border:0;margin:0;padding:0}
 .shape-primary{background:var(--active);color:#f6f3ff;border-color:transparent;font-weight:650}
 .shape-controls{margin-top:13px;padding-top:11px;border-top:1px solid var(--line)}
 .shape-controls h2{margin-bottom:7px}
+.shape-more{margin-top:13px;padding-top:11px;border-top:1px solid var(--line)}
+.shape-more > summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--sunken);color:var(--quiet);font-size:12px;font-weight:550;user-select:none}
+.shape-more > summary::-webkit-details-marker{display:none}
+.shape-more > summary::after{content:"▸";font-size:11px;transition:transform .15s ease}
+.shape-more[open] > summary{color:var(--text);border-color:var(--blue)}
+.shape-more[open] > summary::after{transform:rotate(90deg)}
+.shape-more > .shape-controls{margin-top:8px;padding-top:8px;border-top:0}
 .shape-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .shape-row button{grid-column:1/-1}
 .shape-danger{margin-top:13px}
@@ -129,10 +136,26 @@ fieldset{min-width:0;border:0;margin:0;padding:0}
 /* 自交/退化时轮廓变红提示（松手自动退回上一合法形状） */
 .shape-stroke.is-invalid { fill: #f9e3e4; stroke: #b23b47; stroke-width: 2.4; }
 .shape-stage { position: relative; }
-.shape-peek { position: fixed; right: 18px; bottom: 12px; width: 218px; background: var(--surface, #fff); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px #100e1540; overflow: hidden; z-index: 30; }
+.shape-peek {margin:-13px -13px 12px;border-bottom:1px solid var(--line);background:var(--surface);overflow:hidden}
 .shape-peek header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 11.5px; }
 .shape-peek header b { font-weight: 640; }
 .shape-peek header small { color: var(--quiet); font-size: 10.5px; white-space: nowrap; }
 .shape-peek svg { display: block; width: 100%; height: 168px; cursor: grab; touch-action: none; background: var(--sunken, #f4f3f1); }
 .shape-peek svg:active { cursor: grabbing; }
-@media(max-width:560px){ .shape-peek { width: 160px; right: 10px; bottom: 10px; } .shape-peek svg { height: 120px; } }
+
+.shape-workspace{display:flex;flex-direction:column}
+.shape-stage{align-content:start;min-height:0;padding:10px}
+.shape-sheet{width:min(100%,1120px)}
+.shape-workspace>small{padding:4px 12px 8px;color:var(--quiet);font-size:13px}
+.shape-properties>section[aria-labelledby="liveTitle"]{margin:0 0 18px;padding:0 0 12px;border:0;border-bottom:1px solid var(--line)}
+#removePart{width:100%;margin:8px 0 0}
+.live-frame{position:relative;background:var(--sunken);overflow:hidden;border-radius:5px}
+/* 出图后叠加的轮廓线：深色半透明 + 外发光，白底/深底都能看清 */
+#liveOutline .live-contour{filter:drop-shadow(0 0 1px rgba(255,255,255,.9))}
+#livePane img,.live-frame svg{display:block;width:100%;height:100%;position:absolute;inset:0;object-fit:contain;border:0}
+#livePane figcaption{font-size:13px;line-height:1.45;color:var(--text)}
+#liveAdopt{margin-bottom:6px}
+.shape-properties :is(input,textarea,select),.shape-tools button,#shapeParts button{font-size:13px}
+@media(min-width:901px){.shape-shell{grid-template-columns:clamp(145px,13vw,185px) minmax(0,1fr) clamp(250px,22vw,330px)}}
+@media(max-width:900px){.shape-stage-tools{flex-wrap:wrap}.shape-peek svg{height:150px}}
+@media(max-width:560px){.shape-stage{padding:6px}.shape-stage-tools{justify-content:flex-start}.shape-workspace>small{font-size:12px}}
